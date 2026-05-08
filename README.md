@@ -12,6 +12,46 @@ Place the cloned `LaDe/` folder in the root of this project. The model expects t
 
 ---
 
+## Configuration
+
+In [model.py](model.py), set `BASE_DIR` to your local project path:
+
+```python
+BASE_DIR = "/your/path/to/chonchoun"
+```
+
+Create a `.env` file in the project root with your secret API key:
+
+```
+API_KEY=your_secret_key_here
+```
+
+Generate a secure key with:
+```bash
+python3 -c "import secrets; print(secrets.token_hex(32))"
+```
+
+> `.env` is gitignored and never committed.
+
+### Calling from Next.js
+
+Pass the key in the `X-API-Key` header:
+
+```js
+const res = await fetch("http://your-server/predict_delivery", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "X-API-Key": process.env.ML_API_KEY,
+  },
+  body: JSON.stringify({ ... }),
+});
+```
+
+Add `ML_API_KEY=your_secret_key_here` to your Next.js `.env.local`.
+
+---
+
 ## Setup
 
 **1. Create the virtual environment**

@@ -1,12 +1,67 @@
 from pydantic import BaseModel
-from typing import Optional
 from datetime import datetime
+from typing import List, Optional
+
+class DeliveryItem(BaseModel):
+    order_id: int
+    accept_time: datetime | None = None
+    accept_gps_lng: float
+    accept_gps_lat: float
+    delivery_gps_lng: float
+    delivery_gps_lat: float
+    vehicle_type: int  # 0 = motor, 1 = car
+
+class BatchPredictionInput(BaseModel):
+    courier_id: int
+    accept_time: datetime | None = None
+    deliveries: List[DeliveryItem]
+
+class RetrainItem(BaseModel):
+    order_id: int
+    courier_id: int
+    accept_time: datetime
+    delivery_time: datetime
+    accept_gps_lng: float
+    accept_gps_lat: float
+    delivery_gps_lng: float
+    delivery_gps_lat: float
+    vehicle_type: int  # 0 = motor, 1 = car
+    package_count: int
+
+class AcceptDeliveryInput(BaseModel):
+    order_id: int
 
 class PredictionInput(BaseModel):
-    order_id : int
-    accept_time : datetime 
+    order_id: int
+    accept_time: datetime
     accept_gps_lng: float
     accept_gps_lat: float
     delivery_gps_lng: float
     delivery_gps_lat: float
 
+class PredictionInputPickUP(BaseModel):
+    order_id: int
+    accept_time: datetime
+    accept_gps_lng: float
+    accept_gps_lat: float
+    pickup_gps_lng: float
+    pickup_gps_lat: float
+
+class StopInput(BaseModel):
+    order_id: int
+    accept_gps_lat: float
+    accept_gps_lng: float
+    delivery_gps_lat: float
+    delivery_gps_lng: float
+    vehicle_type: int
+    accept_time: Optional[datetime] = None
+
+class DriverInput(BaseModel):
+    driver_id: int
+    current_lat: float
+    current_lng: float
+
+class AutoMapingInput(BaseModel):
+    accept_time: Optional[datetime] = None
+    drivers: List[DriverInput]
+    stops: List[StopInput]
