@@ -8,7 +8,6 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 import joblib
 from model import train_model as tmd, predict as predict_fn, haversine
-from pickup import train_model as tmp, predict
 from schema import BatchPredictionInput, PredictionInput, AcceptDeliveryInput, AutoMapingInput, DeliveryItem, DriverInput
 from typing import List
 from retrain import retrain_delivery as retrain_delivery_fn
