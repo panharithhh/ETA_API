@@ -1,7 +1,8 @@
 .env
 .venv/
 __pycache__/
-*.pkl
+X_train.pkl
+y_train.pkl
 cambodia_data.csv
 cambodia_data.xlsx
 *.pyc

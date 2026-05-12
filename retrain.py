@@ -7,7 +7,6 @@ import model as m
 
 PREDICTIONS_PATH = os.path.join(os.path.dirname(__file__), "predictions.csv")
 
-
 def retrain_delivery() -> bool:
     if m.X is None or m.y is None:#train the model
         m.train_model()
@@ -40,21 +39,32 @@ def retrain_delivery() -> bool:
     if df.empty:
         return False
 
-    df["distance"] = df.apply(lambda r: m.haversine(
-        r["Accept GPS Lat"], r["Accept GPS Lng"],
-        r["Delivery GPS Lat"], r["Delivery GPS Lng"],
-    ), axis=1)
-    df = df[df["distance"] <= 50]
+    df["segment_distance"] = df["Segment Distance"]
+    df = df[df["segment_distance"] <= 50]
 
     if df.empty:
         return False
 
     df["trip_package_count"] = df.groupby("Accept Time")["Order ID"].transform("count")
-    df["hour"]        = df["Accept Time"].dt.hour
-    df["day_of_week"] = df["Accept Time"].dt.dayofweek
+    df["stop_index"]    = df["Stop Index"]
+    df["remaining_stops"] = df["Remaining Stops"]
+    df["trip_stop_count"] = df["stop_index"] + df["remaining_stops"] + 1
+    df["stop_progress"]   = df["stop_index"] / (df["trip_stop_count"] - 1).clip(lower=1)
+    df["is_first_stop"]   = (df["stop_index"] == 0).astype(int)
 
-    new_X = df[["distance", "hour", "day_of_week", "trip_package_count", "Stop Package Count", "Vehicle Type"]].copy()
-    new_X.columns = ["distance", "hour", "day_of_week", "trip_package_count", "stop_package_count", "vehicle_type"]
+    hour = df["Accept Time"].dt.hour
+    dow  = df["Accept Time"].dt.dayofweek
+    df["hour_sin"] = np.sin(2 * np.pi * hour / 24)
+    df["hour_cos"] = np.cos(2 * np.pi * hour / 24)
+    df["day_sin"]  = np.sin(2 * np.pi * dow / 7)
+    df["day_cos"]  = np.cos(2 * np.pi * dow / 7)
+
+    new_X = df[["segment_distance", "hour_sin", "hour_cos", "day_sin", "day_cos",
+                "trip_package_count", "Stop Package Count", "trip_stop_count",
+                "stop_index", "remaining_stops", "stop_progress", "is_first_stop"]].copy()
+    new_X.columns = ["segment_distance", "hour_sin", "hour_cos", "day_sin", "day_cos",
+                     "trip_package_count", "stop_package_count", "trip_stop_count",
+                     "stop_index", "remaining_stops", "stop_progress", "is_first_stop"]
     new_y = df["time_taken"].reset_index(drop=True)
 
     X_retrain = pd.concat([m.X, new_X], ignore_index=True)

@@ -9,7 +9,6 @@ class DeliveryItem(BaseModel):
     accept_gps_lat: float
     delivery_gps_lng: float
     delivery_gps_lat: float
-    vehicle_type: int  # 0 = motor, 1 = car
 
 class BatchPredictionInput(BaseModel):
     courier_id: int
@@ -25,7 +24,6 @@ class RetrainItem(BaseModel):
     accept_gps_lat: float
     delivery_gps_lng: float
     delivery_gps_lat: float
-    vehicle_type: int  # 0 = motor, 1 = car
     package_count: int
 
 class AcceptDeliveryInput(BaseModel):
@@ -53,7 +51,6 @@ class StopInput(BaseModel):
     accept_gps_lng: float
     delivery_gps_lat: float
     delivery_gps_lng: float
-    vehicle_type: int
     accept_time: Optional[datetime] = None
 
 class DriverInput(BaseModel):

@@ -28,7 +28,7 @@ model_1 = joblib.load("model_1.pkl")
 
 LOG_PATH = os.path.join(os.path.dirname(__file__), "delivery_log.csv")
 LOG_COLS  = ["order_id", "courier_id", "accept_time", "accept_gps_lng", "accept_gps_lat",
-             "delivery_gps_lng", "delivery_gps_lat", "vehicle_type", "stop_package_count",
+             "delivery_gps_lng", "delivery_gps_lat", "stop_package_count",
              "predicted_minutes", "eta", "delivery_time"]
 
 prediction_store: dict = {}  # order_id -> record, held until driver confirms
@@ -58,42 +58,51 @@ def _run_predictions(data: BatchPredictionInput):
     for item in data.deliveries:
         key = (item.delivery_gps_lat, item.delivery_gps_lng)
         stop_counts[key] = stop_counts.get(key, 0) + 1
-
-    SPEED_KMH    = 20.0
-    SERVICE_MIN  = 5.0
+    trip_stop_count = len(stop_counts)
 
     now = datetime.now(ZoneInfo("Asia/Phnom_Penh"))
     first_accept = data.deliveries[0].accept_time or data.accept_time or now
     trip_start = first_accept if first_accept.tzinfo else first_accept.replace(tzinfo=now.tzinfo)
-    last_eta   = trip_start
-    rows       = []
+    last_eta = trip_start
+    prev_lat = data.deliveries[0].accept_gps_lat
+    prev_lng = data.deliveries[0].accept_gps_lng
+    rows = []
+    stop_idx = -1
+    remaining_stops = trip_stop_count
+    stop_progress = 0.0
+    is_first_stop = 1
 
     for i, item in enumerate(data.deliveries):
         stop_package_count = stop_counts[(item.delivery_gps_lat, item.delivery_gps_lng)]
-        item_time = item.accept_time or data.accept_time or now
+        item_time = last_eta
 
-        if i == 0:
-            predicted_minutes = predict_fn(item, trip_package_count, stop_package_count, item.vehicle_type, item_time)
-            eta = trip_start + timedelta(minutes=predicted_minutes)
+        same_stop = (
+            i > 0 and
+            item.delivery_gps_lat == data.deliveries[i - 1].delivery_gps_lat and
+            item.delivery_gps_lng == data.deliveries[i - 1].delivery_gps_lng
+        )
+
+        if same_stop:
+            eta = last_eta
+            segment_dist = 0.0
+            segment_minutes = 0.0
         else:
-            prev = data.deliveries[i - 1]
-            same_stop = (
-                item.delivery_gps_lat == prev.delivery_gps_lat and
-                item.delivery_gps_lng == prev.delivery_gps_lng
+            stop_idx += 1
+            remaining_stops = trip_stop_count - stop_idx - 1
+            stop_progress = stop_idx / max(trip_stop_count - 1, 1)
+            is_first_stop = 1 if stop_idx == 0 else 0
+            segment_dist = haversine(prev_lat, prev_lng, item.delivery_gps_lat, item.delivery_gps_lng)
+            segment_minutes = predict_fn(
+                segment_dist, trip_package_count, stop_package_count,
+                item_time, stop_idx, remaining_stops,
+                trip_stop_count, stop_progress, is_first_stop,
             )
-            if same_stop:
-                eta = last_eta
-            else:
-                dist_km = haversine(
-                    prev.delivery_gps_lat, prev.delivery_gps_lng,
-                    item.delivery_gps_lat, item.delivery_gps_lng,
-                )
-                incremental_min = (dist_km / SPEED_KMH) * 60 + SERVICE_MIN
-                eta = last_eta + timedelta(minutes=incremental_min)
-            predicted_minutes = (eta - trip_start).total_seconds() / 60
+            eta = last_eta + timedelta(minutes=segment_minutes)
+
         eta_early = eta - timedelta(minutes=15)
         eta_late  = eta + timedelta(minutes=15)
         last_eta  = eta
+        prev_lat, prev_lng = item.delivery_gps_lat, item.delivery_gps_lng
 
         prediction_store[item.order_id] = {
             "order_id":           item.order_id,
@@ -103,15 +112,18 @@ def _run_predictions(data: BatchPredictionInput):
             "accept_gps_lat":     item.accept_gps_lat,
             "delivery_gps_lng":   item.delivery_gps_lng,
             "delivery_gps_lat":   item.delivery_gps_lat,
-            "vehicle_type":       item.vehicle_type,
             "stop_package_count": stop_package_count,
-            "predicted_minutes":  round(predicted_minutes, 2),
+            "stop_index":         stop_idx,
+            "remaining_stops":    remaining_stops,
+            "segment_distance":   round(segment_dist, 4),
+            "predicted_minutes":  round(segment_minutes, 2),
             "eta":                eta.isoformat(),
         }
 
+        cumulative_minutes = (eta - trip_start).total_seconds() / 60
         rows.append({
             "order_id":          item.order_id,
-            "predicted_minutes": round(predicted_minutes, 2),
+            "predicted_minutes": round(cumulative_minutes, 2),
             "eta_early":         eta_early.isoformat(),
             "eta":               eta.isoformat(),
             "eta_late":          eta_late.isoformat(),
@@ -126,8 +138,9 @@ def _run_predictions(data: BatchPredictionInput):
 
 PREDICTIONS_PATH = os.path.join(os.path.dirname(__file__), "predictions.csv")
 PREDICTIONS_COLS = ["Order ID", "Accept Time", "Accept GPS Lng", "Accept GPS Lat",
-                    "Delivery GPS Lng", "Delivery GPS Lat", "Vehicle Type",
-                    "Stop Package Count", "Predicted (min)", "ETA", "Delivery Time"]
+                    "Delivery GPS Lng", "Delivery GPS Lat",
+                    "Stop Package Count", "Stop Index", "Remaining Stops",
+                    "Segment Distance", "Predicted (min)", "ETA", "Delivery Time"]
 
 
 @app.post("/accept_delivery")
@@ -217,7 +230,6 @@ def autoMaping(data: AutoMapingInput):
                     accept_gps_lng=s.accept_gps_lng,
                     delivery_gps_lat=s.delivery_gps_lat,
                     delivery_gps_lng=s.delivery_gps_lng,
-                    vehicle_type=s.vehicle_type,
                 )
                 for s in ordered
             ],
@@ -232,9 +244,11 @@ def autoMaping(data: AutoMapingInput):
             "Accept GPS Lat":     prediction_store[d["order_id"]]["accept_gps_lat"],
             "Delivery GPS Lng":   prediction_store[d["order_id"]]["delivery_gps_lng"],
             "Delivery GPS Lat":   prediction_store[d["order_id"]]["delivery_gps_lat"],
-            "Vehicle Type":       prediction_store[d["order_id"]]["vehicle_type"],
             "Stop Package Count": prediction_store[d["order_id"]]["stop_package_count"],
-            "Predicted (min)":    d["predicted_minutes"],
+            "Stop Index":         prediction_store[d["order_id"]]["stop_index"],
+            "Remaining Stops":    prediction_store[d["order_id"]]["remaining_stops"],
+            "Segment Distance":   prediction_store[d["order_id"]]["segment_distance"],
+            "Predicted (min)":    prediction_store[d["order_id"]]["predicted_minutes"],
             "ETA":                d["display"]["eta"],
             "Delivery Time":      "",
         } for d in deliveries])
