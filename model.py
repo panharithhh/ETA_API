@@ -167,7 +167,8 @@ def train_model():
     # randomForestModel = search.best_estimator_
 
     randomForestModel = RandomForestRegressor(
-        n_estimators=500,
+        # 
+        n_estimators=100, # right is 500
         max_depth=10,
         min_samples_split=5,
         min_samples_leaf=4,
