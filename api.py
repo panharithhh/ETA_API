@@ -258,7 +258,7 @@ def autoMaping(data: AutoMapingInput):
         results.append({
             "driver_id":       driver.driver_id,
             "total_packages":  trip_package_count,
-            "optimized_route": [{"stop": i + 1, "order_id": s.order_id} for i, s in enumerate(ordered)],
+            "optimized_route": [{"stop": i + 1, "order_id": s.order_id, "lat": s.delivery_gps_lat, "lng": s.delivery_gps_lng} for i, s in enumerate(ordered)],
             "deliveries":      deliveries,
         })
 
