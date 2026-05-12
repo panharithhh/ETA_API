@@ -240,7 +240,3 @@ if not os.path.exists(MODEL_PATH):
 model = joblib.load(MODEL_PATH)
 X = joblib.load(X_PATH) if os.path.exists(X_PATH) else None
 y = joblib.load(Y_PATH) if os.path.exists(Y_PATH) else None
-   
-   
-   
-train_model() 
