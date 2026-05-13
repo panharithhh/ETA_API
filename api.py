@@ -141,6 +141,11 @@ PREDICTIONS_COLS = ["Order ID", "Accept Time", "Accept GPS Lng", "Accept GPS Lat
                     "Stop Package Count", "Stop Index", "Remaining Stops",
                     "Segment Distance", "Predicted (min)", "ETA", "Delivery Time"]
 
+if os.path.exists(PREDICTIONS_PATH):
+    _existing = pd.read_csv(PREDICTIONS_PATH, nrows=0)
+    if list(_existing.columns) != PREDICTIONS_COLS:
+        os.remove(PREDICTIONS_PATH)
+
 
 @app.post("/accept_delivery")
 def accept_delivery(data: AcceptDeliveryInput): 
