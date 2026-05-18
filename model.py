@@ -21,10 +21,11 @@ Y_PATH    = os.path.join(MODELS_DIR, "y_train.pkl")
 #delivery_time,delivery_gps_time,delivery_gps_lng,delivery_gps_lat,ds
 
 def assign_trips(df):
-    def label(group):
+    df = df.sort_values(["courier_id", "accept_time"]).copy()
+    ids = []
+    for courier_id, group in df.groupby("courier_id", sort=False):
         trip_id = 0
         trip_start = None
-        ids = []
         for t in group["accept_time"]:
             if (trip_start is None or
                     t.date() != trip_start.date() or
@@ -32,17 +33,15 @@ def assign_trips(df):
                 trip_id += 1
                 trip_start = t
             ids.append(trip_id)
-        group = group.copy()
-        group["trip_id"] = ids
-        return group
-    return df.sort_values(["courier_id", "accept_time"]).groupby("courier_id", group_keys=False).apply(label)
+    df["trip_id"] = ids
+    return df
 
 def assign_stops(df):
-    def label(group):
+    df = df.sort_values(["courier_id", "delivery_time"]).copy()
+    ids = []
+    for courier_id, group in df.groupby("courier_id", sort=False):
         stop_id = 0
         stop_start = None
-        
-        ids = []
         for t in group["delivery_time"]:
             if (stop_start is None or
                     t.date() != stop_start.date() or
@@ -50,10 +49,8 @@ def assign_stops(df):
                 stop_id += 1
                 stop_start = t
             ids.append(stop_id)
-        group = group.copy()
-        group["stop_id"] = ids
-        return group
-    return df.sort_values(["courier_id", "delivery_time"]).groupby("courier_id", group_keys=False).apply(label)
+    df["stop_id"] = ids
+    return df
 
 def train_model():
     global model, X, y
