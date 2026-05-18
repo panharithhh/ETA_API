@@ -1,10 +1,10 @@
 .env
 .venv/
 __pycache__/
-X_train.pkl
-y_train.pkl
+models/X_train.pkl
+models/y_train.pkl
 cambodia_data.csv
 cambodia_data.xlsx
 *.pyc
 .DS_Store
-LaDe/
+data/

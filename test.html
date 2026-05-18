@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>How the Model Learns — Good vs Bad Features</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --purple: #7F77DD; --purple-l: #EEEDFE; --purple-d: #3C3489;
+    --teal: #1D9E75;   --teal-l: #E1F5EE;   --teal-d: #085041;
+    --amber: #EF9F27;  --amber-l: #FAEEDA;  --amber-d: #633806;
+    --red: #E24B4A;    --red-l: #FCEBEB;    --red-d: #791F1F;
+    --green: #639922;  --green-l: #EAF3DE;  --green-d: #27500A;
+    --gray-50: #F8FAFC; --gray-100: #F1F5F9; --gray-200: #E2E8F0;
+    --gray-400: #94A3B8; --gray-600: #475569; --gray-800: #1E293B;
+    --sans: 'DM Sans', sans-serif;
+    --mono: 'JetBrains Mono', monospace;
+  }
+  body { font-family: var(--sans); background: #F8FAFC; color: var(--gray-800); padding: 28px 20px; }
+
+  .slide {
+    max-width: 1100px; margin: 0 auto;
+    background: white; border-radius: 16px;
+    border: 1px solid var(--gray-200); padding: 32px 36px 36px;
+  }
+
+  .slide-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 24px; padding-bottom: 16px;
+    border-bottom: 1.5px solid var(--gray-200);
+  }
+  h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.5px; }
+  .hint { font-size: 12px; color: var(--gray-400); font-style: italic; }
+
+  .grid { display: grid; grid-template-columns: 1.15fr 1fr; gap: 22px; }
+
+  .eq-box {
+    border: 2px solid var(--purple); background: var(--purple-l);
+    border-radius: 12px; padding: 13px 16px;
+    font-family: var(--mono); font-size: 13px; font-weight: 700;
+    color: var(--purple-d); text-align: center; min-height: 50px;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.3s; word-break: break-all; line-height: 1.6;
+  }
+
+  .sec-label {
+    font-size: 10px; font-weight: 500; letter-spacing: 1.5px;
+    text-transform: uppercase; color: var(--gray-400); margin-bottom: 7px;
+  }
+
+  .feat-list { display: flex; flex-direction: column; gap: 5px; margin-top: 14px; }
+
+  .feat-row {
+    display: flex; align-items: center; gap: 9px;
+    padding: 7px 11px; border-radius: 8px;
+    border: 1px solid var(--gray-200); background: var(--gray-50);
+    cursor: pointer; transition: all 0.18s; user-select: none;
+  }
+  .feat-row:hover { border-color: var(--gray-400); }
+
+  .feat-row.active-good  { border-color: var(--teal);   background: var(--teal-l); }
+  .feat-row.active-bad   { border-color: var(--red);    background: var(--red-l); }
+
+  .feat-toggle {
+    width: 22px; height: 22px; border-radius: 6px;
+    border: 1.5px solid var(--gray-300); background: white;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; flex-shrink: 0; transition: all 0.18s; color: var(--gray-400);
+  }
+  .feat-row.active-good .feat-toggle { border-color: var(--teal); background: var(--teal); color: white; }
+  .feat-row.active-bad  .feat-toggle { border-color: var(--red);  background: var(--red);  color: white; }
+
+  .feat-name {
+    font-family: var(--mono); font-size: 12px; color: var(--gray-800); flex: 1;
+  }
+  .feat-row:not(.active-good):not(.active-bad) .feat-name { color: var(--gray-400); text-decoration: line-through; }
+
+  .feat-badge {
+    font-size: 10px; font-weight: 700; padding: 2px 7px;
+    border-radius: 20px; flex-shrink: 0; opacity: 0; transition: opacity 0.2s;
+  }
+  .feat-row.active-good .feat-badge { opacity: 1; background: var(--teal-l); color: var(--teal-d); border: 1px solid var(--teal); }
+  .feat-row.active-bad  .feat-badge { opacity: 1; background: var(--red-l);  color: var(--red-d);  border: 1px solid var(--red); }
+
+  .feat-bar-bg { width: 60px; height: 6px; background: var(--gray-200); border-radius: 3px; overflow: hidden; flex-shrink: 0; }
+  .feat-bar    { height: 6px; border-radius: 3px; width: 0; transition: width 0.4s; }
+
+  .mystery { font-size: 11px; color: var(--gray-400); font-style: italic; margin-top: 8px; }
+
+  /* RIGHT */
+  .y-box {
+    border: 2px solid var(--teal); background: var(--teal-l);
+    border-radius: 12px; padding: 11px 16px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .y-main { font-family: var(--mono); font-size: 20px; font-weight: 700; color: var(--teal-d); }
+  .y-sub  { font-size: 11px; color: var(--teal); }
+
+  .yhat-box {
+    border: 2px solid var(--amber); background: var(--amber-l);
+    border-radius: 12px; padding: 11px 16px;
+    display: flex; align-items: center; justify-content: space-between;
+    margin-top: 9px; transition: all 0.3s;
+  }
+  .yhat-main { font-family: var(--mono); font-size: 20px; font-weight: 700; color: var(--amber-d); transition: all 0.3s; }
+
+  .score-row {
+    display: flex; gap: 10px; margin-top: 10px;
+  }
+  .score-pill {
+    flex: 1; text-align: center; padding: 6px 10px;
+    border-radius: 8px; font-family: var(--mono); font-size: 13px;
+    font-weight: 700; border: 1px solid transparent; transition: all 0.3s;
+  }
+
+  .err-card {
+    margin-top: 12px; border: 1px solid var(--gray-200);
+    border-radius: 12px; padding: 13px 16px; background: white;
+  }
+  .err-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 9px; }
+  .err-label { font-family: var(--mono); font-size: 12px; color: var(--gray-600); }
+  .err-val { font-size: 26px; font-weight: 700; transition: color 0.4s; }
+  .c-bad  { color: var(--red); }
+  .c-mid  { color: var(--amber); }
+  .c-good { color: var(--green); }
+
+  .err-track { height: 12px; background: var(--gray-100); border-radius: 6px; overflow: hidden; margin-bottom: 7px; }
+  .err-fill  { height: 12px; border-radius: 6px; width: 100%; transition: width 0.5s, background 0.4s; }
+  .err-sub   { font-size: 12px; color: var(--gray-400); }
+
+  .verdict {
+    margin-top: 11px; padding: 11px 14px;
+    border-left: 3px solid var(--purple); background: var(--purple-l);
+    border-radius: 0 8px 8px 0; font-size: 13px; color: var(--purple-d);
+    line-height: 1.65; min-height: 50px; transition: all 0.3s;
+  }
+
+  .legend {
+    margin-top: 18px; padding: 10px 14px;
+    background: var(--gray-50); border-radius: 8px;
+    border: 1px solid var(--gray-200);
+    display: flex; gap: 20px; align-items: center;
+    font-size: 12px; color: var(--gray-600);
+    grid-column: 1 / -1;
+  }
+  .leg-dot { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+
+  .btn-reset {
+    font-family: var(--sans); font-size: 12px; padding: 6px 14px;
+    border: 1px solid var(--gray-200); border-radius: 8px;
+    background: white; color: var(--gray-600); cursor: pointer; transition: all 0.15s;
+  }
+  .btn-reset:hover { border-color: var(--red); color: var(--red); background: var(--red-l); }
+</style>
+</head>
+<body>
+<div class="slide">
+  <div class="slide-header">
+    <h1>How the model learns — good vs bad features</h1>
+    <div style="display:flex;gap:10px;align-items:center">
+      <span class="hint">some features help, some hurt — can you tell which?</span>
+      <button class="btn-reset" onclick="resetAll()">reset</button>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div>
+      <div class="sec-label">our model</div>
+      <div class="eq-box" id="eq-display">f(x) = b &nbsp; (no features yet)</div>
+
+      <div class="feat-list" id="feat-list"></div>
+      <div class="mystery" id="mystery-hint">toggle features — watch if ŷ gets closer or further from y = 21</div>
+    </div>
+
+    <div>
+      <div class="y-box">
+        <div>
+          <div style="font-size:11px;color:var(--teal);font-style:italic;margin-bottom:2px">reality</div>
+          <div class="y-main">y = 21 min</div>
+        </div>
+        <div class="y-sub">actual delivery time</div>
+      </div>
+
+      <div class="yhat-box">
+        <div>
+          <div style="font-size:11px;color:var(--amber);font-style:italic;margin-bottom:2px">prediction</div>
+          <div class="yhat-main" id="yhat-main">ŷ = 100 min</div>
+        </div>
+        <div class="y-sub" style="color:var(--amber-d)">predicted</div>
+      </div>
+
+      <div class="score-row">
+        <div class="score-pill" id="good-pill" style="background:var(--teal-l);color:var(--teal-d);border-color:var(--teal)">
+          ✓ <span id="good-count">0</span> good
+        </div>
+        <div class="score-pill" id="bad-pill" style="background:var(--red-l);color:var(--red-d);border-color:var(--red)">
+          ✗ <span id="bad-count">0</span> bad
+        </div>
+      </div>
+
+      <div class="err-card">
+        <div class="err-head">
+          <span class="err-label">error = |y − ŷ|</span>
+          <span class="err-val c-bad" id="err-val">79 min</span>
+        </div>
+        <div class="err-track"><div class="err-fill" id="err-fill" style="background:var(--red)"></div></div>
+        <div class="err-sub" id="err-sub">no features — model just guesses</div>
+      </div>
+
+      <div class="verdict" id="verdict">
+        Toggle any feature to start. Some will <strong style="color:var(--teal-d)">lower</strong> the error, others will <strong style="color:var(--red-d)">raise</strong> it — figure out which is which.
+      </div>
+    </div>
+
+    <div class="legend">
+      <div style="display:flex;align-items:center;gap:6px">
+        <div class="leg-dot" style="background:var(--teal)"></div>
+        <span>good feature — lowers error</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <div class="leg-dot" style="background:var(--red)"></div>
+        <span>bad feature — raises error (noise/irrelevant)</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <div class="leg-dot" style="background:var(--gray-400)"></div>
+        <span>inactive</span>
+      </div>
+      <span style="margin-left:auto;color:var(--gray-400);font-style:italic">y = 21 min (real delivery time)</span>
+    </div>
+  </div>
+</div>
+
+<script>
+const Y = 21;
+const BASE = 100;
+
+const features = [
+  { name:"segment_distance",   good:true,  w:0.38, color:"#1D9E75" },
+  { name:"courier_id",         good:false, w:0.05, color:"#E24B4A", note:"random ID — no signal" },
+  { name:"trip_stop_count",    good:true,  w:0.22, color:"#1D9E75" },
+  { name:"order_id",           good:false, w:0.04, color:"#E24B4A", note:"just a number — meaningless" },
+  { name:"stop_index",         good:true,  w:0.18, color:"#1D9E75" },
+  { name:"accept_gps_lat",     good:false, w:0.08, color:"#E24B4A", note:"raw coord — not used directly" },
+  { name:"remaining_stops",    good:true,  w:0.15, color:"#1D9E75" },
+  { name:"accept_gps_lng",     good:false, w:0.08, color:"#E24B4A", note:"raw coord — not used directly" },
+  { name:"rush_hour",          good:true,  w:0.12, color:"#1D9E75" },
+  { name:"vehicle_type",       good:false, w:0.06, color:"#E24B4A", note:"same vehicle every run" },
+  { name:"stop_progress",      good:true,  w:0.10, color:"#1D9E75" },
+  { name:"predicted_minutes",  good:false, w:0.12, color:"#E24B4A", note:"data leakage — cheating!" },
+].map(f => ({ ...f, active: false }));
+
+function getPred() {
+  const good = features.filter(f => f.active && f.good);
+  const bad  = features.filter(f => f.active && !f.good);
+  if (!good.length && !bad.length) return BASE;
+  const goodW = good.reduce((s,f) => s+f.w, 0);
+  const badW  = bad.reduce((s,f) => s+f.w, 0);
+  let pred = BASE * (1 / (1 + goodW * 1.1)) + 10;
+  pred += badW * 28;
+  return Math.round(Math.min(Math.max(pred, 10), 130));
+}
+
+function getEq() {
+  const active = features.filter(f => f.active);
+  if (!active.length) return "f(x) = b  (no features yet)";
+  const terms = active.map((f,i) => `w${i+1}·${f.name}`);
+  if (terms.length <= 2) return "f(x) = " + terms.join(" + ") + " + b";
+  return `f(x) = ${terms.slice(0,2).join(" + ")} + … (${terms.length}) + b`;
+}
+
+function render() {
+  const active  = features.filter(f => f.active);
+  const good    = active.filter(f => f.good);
+  const bad     = active.filter(f => !f.good);
+  const pred    = getPred();
+  const err     = Math.abs(Y - pred);
+  const maxErr  = 110;
+  const pct     = Math.min(Math.round((err / maxErr) * 100), 100);
+
+  document.getElementById("eq-display").textContent = getEq();
+  document.getElementById("yhat-main").textContent  = `ŷ = ${pred} min`;
+  document.getElementById("good-count").textContent = good.length;
+  document.getElementById("bad-count").textContent  = bad.length;
+  document.getElementById("err-val").textContent    = `${err} min`;
+  document.getElementById("err-val").className      = "err-val " + (err<=6?"c-good":err<=18?"c-mid":"c-bad");
+  document.getElementById("err-fill").style.width   = pct + "%";
+  document.getElementById("err-fill").style.background = err<=6?"#639922":err<=18?"#EF9F27":"#E24B4A";
+
+  let sub = "", verdict = "";
+  if (!active.length) {
+    sub = "no features — model just guesses";
+    verdict = `Toggle any feature to start. Some will <strong style="color:var(--teal-d)">lower</strong> the error, others will <strong style="color:var(--red-d)">raise</strong> it — figure out which is which.`;
+  } else if (bad.length > 0 && good.length === 0) {
+    sub = `${bad.length} bad feature${bad.length>1?"s":""} — adding noise, error went UP`;
+    verdict = `These features carry no real signal. Adding them made ŷ <strong>worse</strong> — the model picks up random patterns that don't generalise.`;
+  } else if (bad.length > 0) {
+    sub = `${good.length} good + ${bad.length} bad — bad ones are hurting you`;
+    verdict = `Notice how adding <strong style="color:var(--red-d)">${bad.map(f=>f.name).join(", ")}</strong> pushed the error back up. Bad features add noise that drowns out the good signal.`;
+  } else if (err > 40) {
+    sub = `${good.length} good feature${good.length>1?"s":""} — keep going`;
+    verdict = `Good start. Add more good features — each one adds a <strong>wᵢ·xᵢ</strong> term that pulls ŷ closer to y = 21.`;
+  } else if (err > 12) {
+    sub = `getting close — try adding the remaining good ones`;
+    verdict = `Error is ${err} min. Now try toggling a <strong style="color:var(--red-d)">bad feature</strong> and watch what happens.`;
+  } else {
+    sub = `excellent — all good, no bad features`;
+    verdict = `ŷ = ${pred} ≈ y = 21. Error only ${err} min. Now add a bad feature and show the class why feature selection matters.`;
+  }
+
+  document.getElementById("err-sub").innerHTML  = sub;
+  document.getElementById("verdict").innerHTML  = verdict;
+
+  document.querySelectorAll(".feat-row").forEach((row, i) => {
+    const f = features[i];
+    row.classList.remove("active-good","active-bad");
+    if (f.active) row.classList.add(f.good ? "active-good" : "active-bad");
+    row.querySelector(".feat-toggle").textContent = f.active ? "✓" : "+";
+    const bar = row.querySelector(".feat-bar");
+    bar.style.width = f.active ? Math.round(f.w * 160) + "px" : "0px";
+    bar.style.background = f.good ? "#1D9E75" : "#E24B4A";
+    const badge = row.querySelector(".feat-badge");
+    badge.textContent = f.active ? (f.good ? `w=${f.w}` : f.note || "noise") : "";
+  });
+}
+
+function buildList() {
+  const list = document.getElementById("feat-list");
+  features.forEach((f, i) => {
+    const row = document.createElement("div");
+    row.className = "feat-row";
+    row.innerHTML = `
+      <div class="feat-toggle">+</div>
+      <span class="feat-name">${f.name}</span>
+      <span class="feat-badge"></span>
+      <div class="feat-bar-bg"><div class="feat-bar"></div></div>
+    `;
+    row.addEventListener("click", () => { features[i].active = !features[i].active; render(); });
+    list.appendChild(row);
+  });
+}
+
+function resetAll() { features.forEach(f => f.active = false); render(); }
+
+buildList(); render();
+</script>
+</body>
+</html>

@@ -1,16 +1,15 @@
 import os
-import pandas as pd
-import numpy as np
 from fastapi import FastAPI, Security, HTTPException, status
 from fastapi.security import APIKeyHeader
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 import joblib
-from model import train_model as tmd, predict as predict_fn, haversine
+from model import train_model as tmd, predict as predict_fn, haversine, MODEL_PATH
 from schema import BatchPredictionInput, PredictionInput, AcceptDeliveryInput, AutoMapingInput, DeliveryItem, DriverInput
 from typing import List
 from retrain import retrain_delivery as retrain_delivery_fn
+from db import get_conn, init_db
 
 load_dotenv()
 
@@ -23,12 +22,9 @@ def verify_api_key(key: str = Security(api_key_header)):
 
 app = FastAPI()
 
-model_1 = joblib.load("model_1.pkl")
+model_1 = joblib.load(MODEL_PATH)
 
-LOG_PATH = os.path.join(os.path.dirname(__file__), "delivery_log.csv")
-LOG_COLS  = ["order_id", "courier_id", "accept_time", "accept_gps_lng", "accept_gps_lat",
-             "delivery_gps_lng", "delivery_gps_lat", "stop_package_count",
-             "predicted_minutes", "eta", "delivery_time"]
+init_db()
 
 prediction_store: dict = {}  # order_id -> record, held until driver confirms
 
@@ -36,7 +32,7 @@ prediction_store: dict = {}  # order_id -> record, held until driver confirms
 def initial_training():
     tmd()
     global model_1
-    model_1 = joblib.load("model_1.pkl")
+    model_1 = joblib.load(MODEL_PATH)
     return {"status": "training_complete"}
 
 # @app.post("/train_model_pickup", dependencies=[Security(verify_api_key)])
@@ -48,7 +44,7 @@ def initial_training():
 # def retrain_delivery(records: List[RetrainItem]):
 #     retrain_fn([r.model_dump() for r in records])
 #     global model_1
-#     model_1 = joblib.load("model_1.pkl")
+#     model_1 = joblib.load(MODEL_PATH)
 #     return {"status": "retrain_complete", "new_samples": len(records)}
 
 def _run_predictions(data: BatchPredictionInput):
@@ -135,18 +131,6 @@ def _run_predictions(data: BatchPredictionInput):
 
     return trip_package_count, rows
 
-PREDICTIONS_PATH = os.path.join(os.path.dirname(__file__), "predictions.csv")
-PREDICTIONS_COLS = ["Order ID", "Accept Time", "Accept GPS Lng", "Accept GPS Lat",
-                    "Delivery GPS Lng", "Delivery GPS Lat",
-                    "Stop Package Count", "Stop Index", "Remaining Stops",
-                    "Segment Distance", "Predicted (min)", "ETA", "Delivery Time"]
-
-if os.path.exists(PREDICTIONS_PATH):
-    _existing = pd.read_csv(PREDICTIONS_PATH, nrows=0)
-    if list(_existing.columns) != PREDICTIONS_COLS:
-        os.remove(PREDICTIONS_PATH)
-
-
 @app.post("/accept_delivery")
 def accept_delivery(data: AcceptDeliveryInput): 
     record = prediction_store.pop(data.order_id, None)
@@ -155,16 +139,23 @@ def accept_delivery(data: AcceptDeliveryInput):
     delivery_time = datetime.now(ZoneInfo("Asia/Phnom_Penh")).strftime("%Y-%m-%d %H:%M:%S")
     record["delivery_time"] = delivery_time
 
-    file_exists = os.path.exists(LOG_PATH)
-    pd.DataFrame([record], columns=LOG_COLS).to_csv(
-        LOG_PATH, mode="a", header=not file_exists, index=False
-    )
-
-    if os.path.exists(PREDICTIONS_PATH):
-        df = pd.read_csv(PREDICTIONS_PATH)
-        df["Order ID"] = df["Order ID"].astype(int)
-        df.loc[df["Order ID"] == data.order_id, "Delivery Time"] = delivery_time
-        df.to_csv(PREDICTIONS_PATH, index=False)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO delivery_log
+                    (order_id, courier_id, accept_time, accept_gps_lng, accept_gps_lat,
+                     delivery_gps_lng, delivery_gps_lat, stop_package_count, predicted_minutes, eta, delivery_time)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (record["order_id"], record["courier_id"], record["accept_time"],
+                  record["accept_gps_lng"], record["accept_gps_lat"],
+                  record["delivery_gps_lng"], record["delivery_gps_lat"],
+                  record["stop_package_count"], record["predicted_minutes"],
+                  record["eta"], delivery_time))
+            cur.execute(
+                "UPDATE predictions SET delivery_time = %s WHERE order_id = %s",
+                (delivery_time, data.order_id)
+            )
+        conn.commit()
 
     return {"status": "recorded", "order_id": data.order_id}
 
@@ -206,7 +197,6 @@ def autoMaping(data: AutoMapingInput):
             cur_pos[driver.driver_id] = (nearest.delivery_gps_lat, nearest.delivery_gps_lng)
             remaining.remove(nearest)
 
-    file_exists = os.path.exists(PREDICTIONS_PATH)
     results = []
 
     for driver in data.drivers:
@@ -241,24 +231,22 @@ def autoMaping(data: AutoMapingInput):
 
         trip_package_count, deliveries = _run_predictions(batch)
 
-        new_rows = pd.DataFrame([{
-            "Order ID":           d["order_id"],
-            "Accept Time":        prediction_store[d["order_id"]]["accept_time"],
-            "Accept GPS Lng":     prediction_store[d["order_id"]]["accept_gps_lng"],
-            "Accept GPS Lat":     prediction_store[d["order_id"]]["accept_gps_lat"],
-            "Delivery GPS Lng":   prediction_store[d["order_id"]]["delivery_gps_lng"],
-            "Delivery GPS Lat":   prediction_store[d["order_id"]]["delivery_gps_lat"],
-            "Stop Package Count": prediction_store[d["order_id"]]["stop_package_count"],
-            "Stop Index":         prediction_store[d["order_id"]]["stop_index"],
-            "Remaining Stops":    prediction_store[d["order_id"]]["remaining_stops"],
-            "Segment Distance":   prediction_store[d["order_id"]]["segment_distance"],
-            "Predicted (min)":    prediction_store[d["order_id"]]["predicted_minutes"],
-            "ETA":                d["display"]["eta"],
-            "Delivery Time":      "",
-        } for d in deliveries])
-
-        new_rows.to_csv(PREDICTIONS_PATH, mode="a", header=not file_exists, index=False)
-        file_exists = True
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                for d in deliveries:
+                    rec = prediction_store[d["order_id"]]
+                    cur.execute("""
+                        INSERT INTO predictions
+                            (order_id, accept_time, accept_gps_lng, accept_gps_lat,
+                             delivery_gps_lng, delivery_gps_lat, stop_package_count,
+                             stop_index, remaining_stops, segment_distance, predicted_min, eta)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (order_id) DO NOTHING
+                    """, (rec["order_id"], rec["accept_time"], rec["accept_gps_lng"],
+                          rec["accept_gps_lat"], rec["delivery_gps_lng"], rec["delivery_gps_lat"],
+                          rec["stop_package_count"], rec["stop_index"], rec["remaining_stops"],
+                          rec["segment_distance"], rec["predicted_minutes"], d["display"]["eta"]))
+            conn.commit()
 
         results.append({
             "driver_id":       driver.driver_id,

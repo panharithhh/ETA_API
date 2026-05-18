@@ -4,21 +4,24 @@ from sklearn.ensemble import RandomForestRegressor
 import joblib
 import os
 import model as m
-
-PREDICTIONS_PATH = os.path.join(os.path.dirname(__file__), "predictions.csv")
+from db import get_conn
 
 def retrain_delivery() -> bool:
-    if m.X is None or m.y is None:#train the model
-        m.train_model()
-
-    if m.X is None or m.y is None:#either one is empty
+    if m.X is None or m.y is None:
         return False
 
-    if not os.path.exists(PREDICTIONS_PATH): #wrong path
-        return False
-
-    df = pd.read_csv(PREDICTIONS_PATH)
-    df = df[df["Delivery Time"].notna() & (df["Delivery Time"] != "")]
+    with get_conn() as conn:
+        df = pd.read_sql("""
+            SELECT order_id          AS "Order ID",
+                   accept_time       AS "Accept Time",
+                   segment_distance  AS "Segment Distance",
+                   stop_package_count AS "Stop Package Count",
+                   stop_index        AS "Stop Index",
+                   remaining_stops   AS "Remaining Stops",
+                   delivery_time     AS "Delivery Time"
+            FROM predictions
+            WHERE delivery_time IS NOT NULL
+        """, conn)
 
     if df.empty:
         return False
@@ -92,3 +95,4 @@ def retrain_delivery() -> bool:
     m.y     = y_retrain
 
     return True
+

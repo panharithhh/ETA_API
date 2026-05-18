@@ -9,9 +9,10 @@ from sklearn.compose import TransformedTargetRegressor
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(BASE_DIR, "model_1.pkl")
-X_PATH    = os.path.join(BASE_DIR, "X_train.pkl")
-Y_PATH    = os.path.join(BASE_DIR, "y_train.pkl")
+MODELS_DIR = os.path.join(BASE_DIR, "models")
+MODEL_PATH = os.path.join(MODELS_DIR, "model_1.pkl")
+X_PATH    = os.path.join(MODELS_DIR, "X_train.pkl")
+Y_PATH    = os.path.join(MODELS_DIR, "y_train.pkl")
 
 
 
@@ -148,23 +149,7 @@ def train_model():
 
     X_train, X_temp, y_train, y_temp = train_test_split(X, y, random_state=42, test_size=0.4)
     X_cv, X_test, y_cv, y_test       = train_test_split(X_temp, y_temp, random_state=42, test_size=0.5)
-
-    # param_dist = {
-    #     "n_estimators":      [100, 200, 300, 500],
-    #     "max_depth":         [None, 10, 20, 30],
-    #     "min_samples_split": [2, 5, 10],
-    #     "min_samples_leaf":  [1, 2, 4],
-    #     "max_features":      [0.3, 0.5, 0.7, "sqrt"],
-    # }
-    # search = RandomizedSearchCV(
-    #     RandomForestRegressor(random_state=42, n_jobs=-1),
-    #     param_distributions=param_dist,
-    #     n_iter=30, cv=3,
-    #     scoring="neg_root_mean_squared_error",
-    #     random_state=42, n_jobs=-1, verbose=1,
-    # )
-    # search.fit(X_train, y_train)
-    # randomForestModel = search.best_estimator_
+ 
 
     randomForestModel = RandomForestRegressor(
         # 
@@ -190,12 +175,15 @@ def train_model():
     print(f"CV   error rate: {cv_rmse   / std:.4f}")
     print(f"Test error rate: {test_rmse / std:.4f}")
     print(f"X_train: {X_train.shape}, X_cv: {X_cv.shape}, X_test: {X_test.shape}")
+    
 
+    
+
+DATA_PATH = os.path.join(BASE_DIR, "data", "delivery_yt.csv")
 
 def load_data():
     drop_cols = ["region_id", "city", "lng", "lat", "aoi_id", "aoi_type"]
-    data_yt = pd.read_csv("LaDe/delivery/delivery_yt.csv").drop(columns=drop_cols)
-    return pd.concat([data_yt], ignore_index=True)
+    return pd.read_csv(DATA_PATH).drop(columns=drop_cols)
 
 def clean_data(df: pd.DataFrame):
     df = df.dropna()
