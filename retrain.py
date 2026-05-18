@@ -7,9 +7,6 @@ import model as m
 from db import get_conn
 
 def retrain_delivery() -> bool:
-    if m.X is None or m.y is None:
-        return False
-
     with get_conn() as conn:
         df = pd.read_sql("""
             SELECT order_id          AS "Order ID",
@@ -70,9 +67,14 @@ def retrain_delivery() -> bool:
                      "stop_index", "remaining_stops", "stop_progress", "is_first_stop"]
     new_y = df["time_taken"].reset_index(drop=True)
 
-    X_retrain = pd.concat([m.X, new_X], ignore_index=True)
-    y_retrain = pd.concat([m.y, new_y], ignore_index=True)
-    weights   = np.concatenate([np.ones(len(m.X)), np.full(len(new_X), 10000.0)])
+    if m.X is not None and m.y is not None:
+        X_retrain = pd.concat([m.X, new_X], ignore_index=True)
+        y_retrain = pd.concat([m.y, new_y], ignore_index=True)
+        weights   = np.concatenate([np.ones(len(m.X)), np.full(len(new_X), 10000.0)])
+    else:
+        X_retrain = new_X
+        y_retrain = new_y
+        weights   = None
 
     rf = RandomForestRegressor(
         n_estimators=300,
@@ -84,7 +86,7 @@ def retrain_delivery() -> bool:
         n_jobs=-1,
     )
 
-    rf.fit(X_retrain, y_retrain, sample_weight=weights)
+    rf.fit(X_retrain, y_retrain, sample_weight=weights if weights is not None else None)
 
     joblib.dump(rf, m.MODEL_PATH)
     joblib.dump(X_retrain, m.X_PATH)
