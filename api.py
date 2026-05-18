@@ -146,10 +146,10 @@ def accept_delivery(data: AcceptDeliveryInput):
                     (order_id, courier_id, accept_time, accept_gps_lng, accept_gps_lat,
                      delivery_gps_lng, delivery_gps_lat, stop_package_count, predicted_minutes, eta, delivery_time)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (record["order_id"], record["courier_id"], record["accept_time"],
-                  record["accept_gps_lng"], record["accept_gps_lat"],
-                  record["delivery_gps_lng"], record["delivery_gps_lat"],
-                  record["stop_package_count"], record["predicted_minutes"],
+            """, (int(record["order_id"]), str(record["courier_id"]), record["accept_time"],
+                  float(record["accept_gps_lng"]), float(record["accept_gps_lat"]),
+                  float(record["delivery_gps_lng"]), float(record["delivery_gps_lat"]),
+                  int(record["stop_package_count"]), float(record["predicted_minutes"]),
                   record["eta"], delivery_time))
             cur.execute(
                 "UPDATE predictions SET delivery_time = %s WHERE order_id = %s",
@@ -242,10 +242,10 @@ def autoMaping(data: AutoMapingInput):
                              stop_index, remaining_stops, segment_distance, predicted_min, eta)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (order_id) DO NOTHING
-                    """, (rec["order_id"], rec["accept_time"], rec["accept_gps_lng"],
-                          rec["accept_gps_lat"], rec["delivery_gps_lng"], rec["delivery_gps_lat"],
-                          rec["stop_package_count"], rec["stop_index"], rec["remaining_stops"],
-                          rec["segment_distance"], rec["predicted_minutes"], d["display"]["eta"]))
+                    """, (int(rec["order_id"]), rec["accept_time"], float(rec["accept_gps_lng"]),
+                          float(rec["accept_gps_lat"]), float(rec["delivery_gps_lng"]), float(rec["delivery_gps_lat"]),
+                          int(rec["stop_package_count"]), int(rec["stop_index"]), int(rec["remaining_stops"]),
+                          float(rec["segment_distance"]), float(rec["predicted_minutes"]), d["display"]["eta"]))
             conn.commit()
 
         results.append({
