@@ -43,4 +43,18 @@ def init_db():
                     delivery_time    TIMESTAMP
                 )
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS c2c_log (
+                    order_id        INTEGER PRIMARY KEY,
+                    courier_rating  DOUBLE PRECISION,
+                    pickup_lat      DOUBLE PRECISION,
+                    pickup_lon      DOUBLE PRECISION,
+                    delivery_lat    DOUBLE PRECISION,
+                    delivery_lon    DOUBLE PRECISION,
+                    distance_km     DOUBLE PRECISION,
+                    accept_time     TIMESTAMP,
+                    predicted_min   DOUBLE PRECISION,
+                    delivery_time   TIMESTAMP
+                )
+            """)
         conn.commit()

@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Delivery Routes</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #111; color: #fff; display: flex; flex-direction: column; height: 100vh; }
+
+    .topbar {
+      padding: 14px 20px;
+      background: #1a1a2e;
+      border-bottom: 1px solid #2a2a3e;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      flex-shrink: 0;
+    }
+    .topbar h1 { font-size: 16px; font-weight: 700; }
+    .topbar .sub { font-size: 12px; color: #888; }
+
+    .legend {
+      display: flex;
+      gap: 16px;
+      margin-left: auto;
+    }
+    .leg-item {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12px;
+      cursor: pointer;
+      padding: 4px 10px;
+      border-radius: 20px;
+      border: 1px solid transparent;
+      transition: all 0.15s;
+    }
+    .leg-item:hover { background: rgba(255,255,255,0.07); }
+    .leg-item.active { border-color: rgba(255,255,255,0.2); background: rgba(255,255,255,0.07); }
+    .leg-dot { width: 12px; height: 12px; border-radius: 50%; }
+
+    #map { flex: 1; }
+
+    /* Custom marker styles */
+    .stop-marker {
+      width: 32px; height: 32px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 800;
+      color: #fff;
+      border: 2.5px solid rgba(255,255,255,0.4);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+    }
+    .stop-marker.d1 { background: #4361ee; }
+    .stop-marker.d2 { background: #f72585; }
+    .stop-marker.d3 { background: #06d6a0; color: #073b2e; }
+
+    /* Sidebar panel */
+    .panel {
+      position: absolute;
+      top: 70px;
+      left: 10px;
+      z-index: 1000;
+      background: rgba(20,20,40,0.92);
+      backdrop-filter: blur(8px);
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.1);
+      width: 220px;
+      overflow: hidden;
+    }
+    .panel-driver {
+      padding: 10px 14px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      transition: background 0.15s;
+    }
+    .panel-driver:hover { background: rgba(255,255,255,0.06); }
+    .panel-driver:last-child { border-bottom: none; }
+    .drv-icon { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; flex-shrink: 0; }
+    .drv-name { font-size: 13px; font-weight: 700; }
+    .drv-meta { font-size: 11px; color: #888; }
+
+    /* Popup override */
+    .leaflet-popup-content-wrapper {
+      background: #1a1a2e !important;
+      color: #fff !important;
+      border-radius: 10px !important;
+      border: 1px solid rgba(255,255,255,0.1) !important;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.5) !important;
+    }
+    .leaflet-popup-tip { background: #1a1a2e !important; }
+    .leaflet-popup-content { margin: 10px 14px !important; }
+    .popup-title { font-size: 14px; font-weight: 700; margin-bottom: 4px; }
+    .popup-row { font-size: 12px; color: #aaa; line-height: 1.8; }
+    .popup-row span { color: #fff; font-weight: 600; }
+    .leaflet-popup-close-button { color: #888 !important; }
+  </style>
+</head>
+<body>
+
+<div class="topbar">
+  <div>
+    <h1>Delivery Routes — May 20, 2026</h1>
+    <div class="sub">Phnom Penh · 3 drivers · 21 stops</div>
+  </div>
+  <div class="legend">
+    <div class="leg-item active" id="tog1" onclick="toggleDriver(1)">
+      <div class="leg-dot" style="background:#4361ee;"></div> Driver 1
+    </div>
+    <div class="leg-item active" id="tog2" onclick="toggleDriver(2)">
+      <div class="leg-dot" style="background:#f72585;"></div> Driver 2
+    </div>
+    <div class="leg-item active" id="tog3" onclick="toggleDriver(3)">
+      <div class="leg-dot" style="background:#06d6a0;"></div> Driver 3
+    </div>
+  </div>
+</div>
+
+<div id="map"></div>
+
+<div class="panel">
+  <div class="panel-driver" onclick="focusDriver(1)">
+    <div class="drv-icon" style="background:#4361ee;">🚚</div>
+    <div>
+      <div class="drv-name">Driver 1</div>
+      <div class="drv-meta">7 stops · ends 9:07 AM</div>
+    </div>
+  </div>
+  <div class="panel-driver" onclick="focusDriver(2)">
+    <div class="drv-icon" style="background:#f72585;">🚚</div>
+    <div>
+      <div class="drv-name">Driver 2</div>
+      <div class="drv-meta">7 stops · ends 9:02 AM</div>
+    </div>
+  </div>
+  <div class="panel-driver" onclick="focusDriver(3)">
+    <div class="drv-icon" style="background:#06d6a0; color:#064e3b;">🚚</div>
+    <div>
+      <div class="drv-name">Driver 3</div>
+      <div class="drv-meta">7 stops · ends 9:01 AM</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const drivers = [
+  {
+    id: 1, color: '#4361ee', cls: 'd1',
+    start: [11.568, 104.8815],
+    stops: [
+      { order_id: 109, lat: 11.5728, lng: 104.8827, stop: 1, seg_km: 0.55, seg_min: 22.8, eta: '7:22 AM', window: '7:07 – 7:37 AM' },
+      { order_id: 119, lat: 11.5621, lng: 104.8958, stop: 2, seg_km: 1.86, seg_min: 16.7, eta: '7:39 AM', window: '7:24 – 7:54 AM' },
+      { order_id: 111, lat: 11.5677, lng: 104.9019, stop: 3, seg_km: 0.91, seg_min: 14.6, eta: '7:53 AM', window: '7:38 – 8:08 AM' },
+      { order_id: 117, lat: 11.5857, lng: 104.8989, stop: 4, seg_km: 2.03, seg_min: 16.8, eta: '8:10 AM', window: '7:55 – 8:25 AM' },
+      { order_id: 105, lat: 11.5918, lng: 104.9002, stop: 5, seg_km: 0.69, seg_min: 13.8, eta: '8:24 AM', window: '8:09 – 8:39 AM' },
+      { order_id: 115, lat: 11.5832, lng: 104.9266, stop: 6, seg_km: 3.03, seg_min: 20.8, eta: '8:45 AM', window: '8:30 – 9:00 AM' },
+      { order_id: 112, lat: 11.54,   lng: 104.9362, stop: 7, seg_km: 4.92, seg_min: 22.0, eta: '9:07 AM', window: '8:52 – 9:22 AM' },
+    ]
+  },
+  {
+    id: 2, color: '#f72585', cls: 'd2',
+    start: [11.5406, 104.8934],
+    stops: [
+      { order_id: 116, lat: 11.5437, lng: 104.8961, stop: 1, seg_km: 0.45, seg_min: 23.7, eta: '7:23 AM', window: '7:08 – 7:38 AM' },
+      { order_id: 120, lat: 11.55,   lng: 104.8932, stop: 2, seg_km: 0.77, seg_min: 14.4, eta: '7:38 AM', window: '7:23 – 7:53 AM' },
+      { order_id: 101, lat: 11.5516, lng: 104.8818, stop: 3, seg_km: 1.25, seg_min: 15.6, eta: '7:53 AM', window: '7:38 – 8:08 AM' },
+      { order_id: 121, lat: 11.5268, lng: 104.8828, stop: 4, seg_km: 2.76, seg_min: 20.5, eta: '8:14 AM', window: '7:59 – 8:29 AM' },
+      { order_id: 102, lat: 11.522,  lng: 104.8919, stop: 5, seg_km: 1.13, seg_min: 15.4, eta: '8:29 AM', window: '8:14 – 8:44 AM' },
+      { order_id: 110, lat: 11.526,  lng: 104.894,  stop: 6, seg_km: 0.5,  seg_min: 11.4, eta: '8:40 AM', window: '8:25 – 8:55 AM' },
+      { order_id: 103, lat: 11.5365, lng: 104.9154, stop: 7, seg_km: 2.61, seg_min: 21.8, eta: '9:02 AM', window: '8:47 – 9:17 AM' },
+    ]
+  },
+  {
+    id: 3, color: '#06d6a0', cls: 'd3',
+    start: [11.5752, 104.9206],
+    stops: [
+      { order_id: 104, lat: 11.5804, lng: 104.9219, stop: 1, seg_km: 0.6,  seg_min: 23.5, eta: '7:23 AM', window: '7:08 – 7:38 AM' },
+      { order_id: 108, lat: 11.5822, lng: 104.9171, stop: 2, seg_km: 0.56, seg_min: 13.6, eta: '7:37 AM', window: '7:22 – 7:52 AM' },
+      { order_id: 106, lat: 11.5836, lng: 104.9162, stop: 3, seg_km: 0.18, seg_min: 10.7, eta: '7:47 AM', window: '7:32 – 8:02 AM' },
+      { order_id: 118, lat: 11.5886, lng: 104.9075, stop: 4, seg_km: 1.1,  seg_min: 14.9, eta: '8:02 AM', window: '7:47 – 8:17 AM' },
+      { order_id: 114, lat: 11.5942, lng: 104.9184, stop: 5, seg_km: 1.34, seg_min: 16.4, eta: '8:18 AM', window: '8:03 – 8:33 AM' },
+      { order_id: 107, lat: 11.5602, lng: 104.9384, stop: 6, seg_km: 4.36, seg_min: 21.6, eta: '8:40 AM', window: '8:25 – 8:55 AM' },
+      { order_id: 113, lat: 11.5328, lng: 104.9237, stop: 7, seg_km: 3.44, seg_min: 21.0, eta: '9:01 AM', window: '8:46 – 9:16 AM' },
+    ]
+  }
+];
+
+const map = L.map('map', { zoomControl: false }).setView([11.5600, 104.9100], 13);
+
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '© OpenStreetMap © CARTO',
+  maxZoom: 19
+}).addTo(map);
+
+L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+const driverLayers = {};
+
+drivers.forEach(driver => {
+  const group = L.layerGroup().addTo(map);
+  driverLayers[driver.id] = group;
+
+  // Route polyline (starts from driver's current position)
+  const coords = [driver.start, ...driver.stops.map(s => [s.lat, s.lng])];
+  L.polyline(coords, {
+    color: driver.color,
+    weight: 4,
+    opacity: 0.85,
+    dashArray: null,
+    lineJoin: 'round',
+    lineCap: 'round'
+  }).addTo(group);
+
+  // Stop markers
+  driver.stops.forEach(stop => {
+    const icon = L.divIcon({
+      className: '',
+      html: `<div class="stop-marker ${driver.cls}">${stop.stop}</div>`,
+      iconSize: [32, 32],
+      iconAnchor: [16, 16],
+      popupAnchor: [0, -18]
+    });
+
+    const marker = L.marker([stop.lat, stop.lng], { icon }).addTo(group);
+    marker.bindPopup(`
+      <div class="popup-title" style="color:${driver.color}">Order #${stop.order_id}</div>
+      <div class="popup-row">Driver: <span>Driver ${driver.id}</span></div>
+      <div class="popup-row">Stop: <span>${stop.stop} of 7</span></div>
+      <div class="popup-row">Segment: <span>${stop.seg_km} km · ${stop.seg_min} min</span></div>
+      <div class="popup-row">ETA: <span>${stop.eta}</span></div>
+      <div class="popup-row">Window: <span>${stop.window}</span></div>
+    `, { maxWidth: 200 });
+  });
+
+  // Start/end labels
+  const first = driver.stops[0];
+  const last = driver.stops[driver.stops.length - 1];
+
+  L.marker([first.lat, first.lng], {
+    icon: L.divIcon({
+      className: '',
+      html: `<div style="background:#222;color:#fff;font-size:10px;font-weight:700;padding:2px 6px;border-radius:10px;border:1px solid ${driver.color};white-space:nowrap;margin-top:-30px;">▶ D${driver.id} start</div>`,
+      iconAnchor: [20, 42]
+    })
+  }).addTo(group);
+});
+
+const visible = { 1: true, 2: true, 3: true };
+
+function toggleDriver(id) {
+  visible[id] = !visible[id];
+  const tog = document.getElementById('tog' + id);
+  if (visible[id]) {
+    map.addLayer(driverLayers[id]);
+    tog.classList.add('active');
+  } else {
+    map.removeLayer(driverLayers[id]);
+    tog.classList.remove('active');
+  }
+}
+
+function focusDriver(id) {
+  const stops = drivers.find(d => d.id === id).stops;
+  const coords = stops.map(s => [s.lat, s.lng]);
+  map.fitBounds(L.latLngBounds(coords).pad(0.15));
+  // Make sure it's visible
+  if (!visible[id]) toggleDriver(id);
+}
+</script>
+</body>
+</html>

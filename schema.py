@@ -58,7 +58,27 @@ class DriverInput(BaseModel):
     current_lat: float
     current_lng: float
 
+class OrderInput(BaseModel):
+    order_id: int
+    accept_time: Optional[datetime] = None
+    pickup_lat: float
+    pickup_lng: float
+    dropoff_lat: float
+    dropoff_lng: float
+
 class AutoMapingInput(BaseModel):
     accept_time: Optional[datetime] = None
     drivers: List[DriverInput]
-    stops: List[StopInput]
+    stops: Optional[List[StopInput]] = None
+    orders: Optional[List[OrderInput]] = None
+
+class C2CPredictInput(BaseModel):
+    order_id: int
+    pickup_lat: float
+    pickup_lon: float
+    delivery_lat: float
+    delivery_lon: float
+    courier_rating: float
+
+class C2CConfirmInput(BaseModel):
+    order_id: int
