@@ -130,6 +130,7 @@ def assign_pickup(package: Package, db: Session, now: datetime | None = None) ->
         }
 
     # All real-time tiers exhausted → drop at branch
+    db.commit()
     branch = _nearest_branch(package.receiver_lat, package.receiver_lng, db)
     return {
         "type": "drop_at_branch",

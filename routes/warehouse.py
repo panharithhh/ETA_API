@@ -72,7 +72,7 @@ def arrive(package_id: int, body: ArriveBody, db: Session = Depends(get_db)):
     if package.status not in _ARRIVE_FROM:
         raise HTTPException(
             status_code=409,
-            detail=f"Cannot arrive: package is '{package.status}', expected one of {[s.value for s in _ARRIVE_FROM]}",
+            detail=f"Cannot arrive: package is '{package.status.value}', expected one of {[s.value for s in _ARRIVE_FROM]}",
         )
 
     branch = db.get(Branch, body.branch_id)
@@ -133,7 +133,7 @@ def depart(package_id: int, body: DepartBody, db: Session = Depends(get_db)):
     if package.status not in _DEPART_FROM:
         raise HTTPException(
             status_code=409,
-            detail=f"Cannot depart: package is '{package.status}', expected 'at_warehouse'",
+            detail=f"Cannot depart: package is '{package.status.value}', expected 'at_warehouse'",
         )
 
     # Mark current inventory record as shipped
