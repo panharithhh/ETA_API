@@ -146,5 +146,10 @@ else:
 X = joblib.load(X_PATH) if os.path.exists(X_PATH) else None
 y = joblib.load(Y_PATH) if os.path.exists(Y_PATH) else None
 
-
-train()
+if not os.path.exists(MODEL_PATH):
+    if not os.path.exists(DATA_PATH):
+        raise FileNotFoundError(
+            f"C2C model not found at {MODEL_PATH} and training data not found at {DATA_PATH}. "
+            "Run train() locally and commit models/c2c_model.pkl."
+        )
+    train()
