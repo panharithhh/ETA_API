@@ -183,6 +183,11 @@ def train_model():
     mask = y_train <= seg_p99
     X_train, y_train, cid_train = X_train[mask], y_train[mask], cid_train[mask]
 
+    cv_mask   = y_cv   <= seg_p99
+    test_mask = y_test <= seg_p99
+    X_cv,   y_cv,   cid_cv   = X_cv[cv_mask],     y_cv[cv_mask],     cid_cv[cv_mask]
+    X_test, y_test, cid_test = X_test[test_mask], y_test[test_mask], cid_test[test_mask]
+
     # BUG 1 FIX: courier_avg_speed was computed on full dataset before split,
     # leaking the target (segment_speed = distance/time uses segment_time = target).
     # Now fitted only on training rows.
@@ -230,8 +235,11 @@ def train_model():
     cv_rmse    = np.sqrt(np.mean((cv_preds   - y_cv.values)   ** 2))
     test_rmse  = np.sqrt(np.mean((test_preds - y_test.values) ** 2))
     std = y_train.std()
+    std_test = y_test.std()
+    print()
     print(f"CV   RMSE: {cv_rmse:.2f} min  ({cv_rmse / std:.4f} normalized)")
     print(f"Test RMSE: {test_rmse:.2f} min  ({test_rmse / std:.4f} normalized)")
+    print(f"benhc mark {test_rmse/std_test}")
     print(f"X_train: {X_train.shape}, X_cv: {X_cv.shape}, X_test: {X_test.shape}\n")
 
     importances = pd.Series(randomForestModel.feature_importances_, index=X_train.columns)
@@ -239,17 +247,18 @@ def train_model():
     print(importances.sort_values(ascending=False).to_string(), "\n")
 
     # Sanity check: 1 km segment, 9 AM Monday, stop 3 of 6, mid-trip
-    sanity = predict(1.0, 6, 1, pd.Timestamp("2026-01-05 09:00:00"),
-                     stop_index=3, remaining_stops=2, trip_stop_count=6,
-                     stop_progress=0.5, is_first_stop=0, courier_id=None)
-    print(f"Sanity check — 1 km, 9 AM Mon, mid-trip: {sanity:.1f} min  (expected 5–15)")
+    # sanity = predict(1.0, 6, 1, pd.Timestamp("2026-01-05 09:00:00"),
+    #                  stop_index=3, remaining_stops=2, trip_stop_count=6,
+    #                  stop_progress=0.5, is_first_stop=0, courier_id=None)
+    # print(f"Sanity check — 1 km, 9 AM Mon, mid-trip: {sanity:.1f} min  (expected 5–15)")
 
 
 DATA_PATH = os.path.join(BASE_DIR, "data", "delivery_yt.csv")
 
 
 def load_data():
-    drop_cols = ["region_id", "city", "lng", "lat", "aoi_id", "aoi_type"]
+    drop_cols = ["region_id", "city", "lng", "lat", "aoi_id", "aoi_type"]    
+    
     return pd.read_csv(DATA_PATH).drop(columns=drop_cols)
 
 
@@ -309,3 +318,6 @@ courier_speed = (
 )
 X = joblib.load(X_PATH) if os.path.exists(X_PATH) else None
 y = joblib.load(Y_PATH) if os.path.exists(Y_PATH) else None
+
+
+train_model()

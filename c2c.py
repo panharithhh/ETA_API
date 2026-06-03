@@ -96,13 +96,15 @@ def train():
         n_jobs=-1,
     )
     rf.fit(X_train, y_train)
-
+    
+    
     for name, Xs, ys in [("Val", X_val, y_val), ("Test", X_test, y_test)]:
         preds = rf.predict(Xs)
         rmse  = np.sqrt(np.mean((preds - ys.values) ** 2))
         mae   = np.mean(np.abs(preds - ys.values))
         print(f"C2C {name} RMSE: {rmse:.2f} min   MAE: {mae:.2f} min")
 
+    print(rmse/y_test.std())
     os.makedirs(os.path.join(BASE_DIR, "models"), exist_ok=True)
     joblib.dump(rf, MODEL_PATH)
     joblib.dump(X_train, X_PATH)
@@ -143,3 +145,6 @@ else:
 
 X = joblib.load(X_PATH) if os.path.exists(X_PATH) else None
 y = joblib.load(Y_PATH) if os.path.exists(Y_PATH) else None
+
+
+train()

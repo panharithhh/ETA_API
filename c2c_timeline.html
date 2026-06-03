@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>C2C Delivery</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #111; color: #fff; height: 100vh; display: flex; flex-direction: column; }
+
+    #map { flex: 1; }
+
+    .card {
+      position: absolute;
+      top: 16px; left: 16px;
+      z-index: 1000;
+      background: rgba(18, 18, 30, 0.92);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 14px;
+      padding: 18px 20px;
+      width: 240px;
+    }
+
+    .card-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: #555; margin-bottom: 10px; }
+
+    .stat-row { display: flex; gap: 16px; margin-bottom: 16px; }
+    .stat { flex: 1; }
+    .stat-val { font-size: 26px; font-weight: 800; line-height: 1; }
+    .stat-unit { font-size: 11px; color: #666; margin-top: 3px; }
+
+    .divider { height: 1px; background: rgba(255,255,255,0.07); margin-bottom: 14px; }
+
+    .eta-label { font-size: 10px; color: #555; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
+    .eta-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+    .eta-time { font-size: 13px; color: #888; }
+    .eta-time.center { font-size: 18px; font-weight: 800; color: #4361ee; }
+
+    .eta-bar { height: 3px; background: rgba(255,255,255,0.07); border-radius: 2px; position: relative; margin-bottom: 5px; }
+    .eta-fill { position: absolute; inset: 0; border-radius: 2px; background: #4361ee; opacity: 0.4; }
+    .eta-dot { position: absolute; width: 10px; height: 10px; background: #4361ee; border-radius: 50%; top: 50%; left: 50%; transform: translate(-50%, -50%); border: 2px solid #fff; }
+
+    .leaflet-popup-content-wrapper { background: #1a1a2e !important; color: #fff !important; border-radius: 10px !important; border: 1px solid rgba(255,255,255,0.1) !important; box-shadow: 0 4px 20px rgba(0,0,0,0.5) !important; }
+    .leaflet-popup-tip { background: #1a1a2e !important; }
+    .leaflet-popup-content { margin: 10px 14px !important; }
+    .popup-title { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+    .popup-row { font-size: 11px; color: #888; line-height: 1.9; }
+    .popup-row span { color: #eee; font-weight: 600; }
+    .leaflet-popup-close-button { color: #666 !important; }
+
+    .pin { width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 15px; border: 2px solid rgba(255,255,255,0.3); box-shadow: 0 2px 10px rgba(0,0,0,0.6); }
+  </style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div class="card">
+  <div class="card-label">Order #0 · C2C</div>
+
+  <div class="stat-row">
+    <div class="stat">
+      <div class="stat-val" id="dist-val">—</div>
+      <div class="stat-unit">km distance</div>
+    </div>
+    <div class="stat">
+      <div class="stat-val">21.7</div>
+      <div class="stat-unit">min estimated</div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="eta-label">Arrival window</div>
+  <div class="eta-bar">
+    <div class="eta-fill"></div>
+    <div class="eta-dot"></div>
+  </div>
+  <div class="eta-row">
+    <div class="eta-time">7:55 AM</div>
+    <div class="eta-time center">8:10 AM</div>
+    <div class="eta-time">8:25 AM</div>
+  </div>
+</div>
+
+<script>
+const order = {
+  order_id:     0,
+  predicted_min: 21.67,
+  pickup_lat:   11.5603,
+  pickup_lon:   104.9288,
+  delivery_lat: 11.5728,
+  delivery_lon: 104.9157,
+  display: { early: '7:55 AM', eta: '8:10 AM', late: '8:25 AM' },
+};
+
+function haversine(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+const dist = haversine(order.pickup_lat, order.pickup_lon, order.delivery_lat, order.delivery_lon);
+document.getElementById('dist-val').textContent = dist.toFixed(1);
+
+const map = L.map('map', { zoomControl: false }).setView([
+  (order.pickup_lat + order.delivery_lat) / 2,
+  (order.pickup_lon + order.delivery_lon) / 2,
+], 14);
+
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '© OpenStreetMap © CARTO', maxZoom: 19,
+}).addTo(map);
+
+L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+L.polyline([
+  [order.pickup_lat, order.pickup_lon],
+  [order.delivery_lat, order.delivery_lon],
+], { color: '#4361ee', weight: 3, opacity: 0.8, dashArray: '8 6' }).addTo(map);
+
+L.marker([order.pickup_lat, order.pickup_lon], {
+  icon: L.divIcon({
+    className: '',
+    html: `<div class="pin" style="background:rgba(0,0,0,0.7); border-color:#4361ee;">🍽️</div>`,
+    iconSize: [30,30], iconAnchor: [15,15], popupAnchor: [0,-18],
+  })
+}).bindPopup(`
+  <div class="popup-title" style="color:#4361ee">Pickup</div>
+  <div class="popup-row">Coords: <span>${order.pickup_lat}, ${order.pickup_lon}</span></div>
+`).addTo(map);
+
+L.marker([order.delivery_lat, order.delivery_lon], {
+  icon: L.divIcon({
+    className: '',
+    html: `<div class="pin" style="background:#4361ee; border-color:rgba(255,255,255,0.4);">🏠</div>`,
+    iconSize: [30,30], iconAnchor: [15,15], popupAnchor: [0,-18],
+  })
+}).bindPopup(`
+  <div class="popup-title" style="color:#4361ee">Delivery</div>
+  <div class="popup-row">ETA: <span>${order.display.eta}</span></div>
+  <div class="popup-row">Window: <span>${order.display.early} – ${order.display.late}</span></div>
+  <div class="popup-row">Predicted: <span>${order.predicted_min} min</span></div>
+`).addTo(map);
+
+map.fitBounds([
+  [order.pickup_lat, order.pickup_lon],
+  [order.delivery_lat, order.delivery_lon],
+], { padding: [60, 60] });
+</script>
+</body>
+</html>

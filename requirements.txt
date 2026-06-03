@@ -22,3 +22,7 @@ threadpoolctl==3.6.0
 typing-inspection==0.4.2
 typing_extensions==4.15.0
 uvicorn==0.46.0
+# First-mile additions
+sqlalchemy>=2.0.0
+alembic>=1.13.0
+pytest>=8.0.0
