@@ -1,3 +1,4 @@
+import os
 import joblib
 from datetime import datetime, timedelta
 from typing import List
@@ -6,7 +7,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException, Security
 
 from db import get_conn
-from model import train_model as tmd, predict as predict_fn, haversine, MODEL_PATH
+from model import train_model as tmd, predict as predict_fn, haversine, MODEL_PATH, DATA_PATH
 from retrain import retrain_delivery as retrain_delivery_fn
 from schema import (
     AcceptDeliveryInput,
@@ -116,15 +117,17 @@ def _run_predictions(data: BatchPredictionInput):
     return trip_package_count, rows
 
 
-@router.post("/train", summary="Retrain the delivery ETA model from scratch", dependencies=[Security(verify_api_key)])
+@router.post("/train", dependencies=[Security(verify_api_key)])
 def train_model():
+    if not os.path.exists(DATA_PATH):
+        raise HTTPException(status_code=400, detail="Training data not available on this server. Run locally.")
     tmd()
     global model_1
     model_1 = joblib.load(MODEL_PATH)
     return {"status": "training_complete"}
 
 
-@router.post("/accept", summary="Confirm a delivery — logs actual delivery time and triggers DB write")
+@router.post("/accept")
 def accept_delivery(data: AcceptDeliveryInput):
     record = prediction_store.pop(data.order_id, None)
     if record is None:
@@ -159,7 +162,7 @@ def accept_delivery(data: AcceptDeliveryInput):
     return {"status": "recorded", "order_id": data.order_id}
 
 
-@router.post("/retrain", summary="Incremental retrain using confirmed deliveries from DB", dependencies=[Security(verify_api_key)])
+@router.post("/retrain", dependencies=[Security(verify_api_key)])
 def retrain():
     ok = retrain_delivery_fn()
     if ok:
@@ -167,7 +170,7 @@ def retrain():
     return {"status": "retrain failed"}
 
 
-@router.post("/auto-mapping", summary="Assign stops to drivers and generate optimized routes with ETAs", dependencies=[Security(verify_api_key)])
+@router.post("/auto-mapping", dependencies=[Security(verify_api_key)])
 def auto_mapping(data: AutoMapingInput):
     if not data.stops:
         raise HTTPException(status_code=400, detail="No stops provided")

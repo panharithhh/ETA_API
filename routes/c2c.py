@@ -17,7 +17,7 @@ router = APIRouter(prefix="/c2c", tags=["C2C — Customer to Customer"])
 c2c_store: dict = {}  # order_id → record, held until confirmed
 
 
-@router.post("/predict", summary="Predict delivery time for a C2C order and hold in memory")
+@router.post("/predict")
 def c2c_predict(data: C2CPredictInput):
     now = datetime.now(ZoneInfo("Asia/Phnom_Penh"))
     predicted_min = c2c_model.predict(
@@ -68,12 +68,12 @@ def c2c_predict(data: C2CPredictInput):
     }
 
 
-@router.get("/active", summary="List all C2C orders currently in-flight (predicted but not confirmed)")
+@router.get("/active")
 def c2c_active():
     return {"orders": list(c2c_store.values())}
 
 
-@router.post("/confirm", summary="Confirm delivery — logs actual time and clears from in-memory store")
+@router.post("/confirm")
 def c2c_confirm(data: C2CConfirmInput):
     record = c2c_store.pop(data.order_id, None)
     if record is None:
@@ -104,7 +104,7 @@ def c2c_confirm(data: C2CConfirmInput):
     return {"status": "recorded", "order_id": data.order_id}
 
 
-@router.post("/retrain", summary="Retrain C2C model from confirmed delivery logs", dependencies=[Security(verify_api_key)])
+@router.post("/retrain", dependencies=[Security(verify_api_key)])
 def c2c_retrain():
     with get_conn() as conn:
         df = pd.read_sql(

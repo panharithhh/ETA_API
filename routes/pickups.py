@@ -9,7 +9,7 @@ from services.first_mile import assign_pickup
 router = APIRouter(prefix="/pickups", tags=["First Mile — Pickups"])
 
 
-@router.post("", summary="Book a pickup — returns assigned driver, scheduled slot, or drop-at-branch")
+@router.post("")
 def book_pickup(data: PickupBookRequest, db: Session = Depends(get_db)):
     package = Package(
         customer_phone=data.customer_phone,
@@ -32,7 +32,7 @@ def book_pickup(data: PickupBookRequest, db: Session = Depends(get_db)):
     return result
 
 
-@router.post("/{package_id}/scan", summary="Driver scans QR code — transitions package to picked_up")
+@router.post("/{package_id}/scan")
 def scan_qr(package_id: int, _: ScanRequest = ScanRequest(), db: Session = Depends(get_db)):
     package = db.get(Package, package_id)
     if not package:
@@ -55,7 +55,7 @@ def scan_qr(package_id: int, _: ScanRequest = ScanRequest(), db: Session = Depen
     return {"package_id": package_id, "status": PackageStatus.picked_up}
 
 
-@router.post("/{package_id}/dropoff", summary="Package checked in at origin branch — transitions to at_origin_branch")
+@router.post("/{package_id}/dropoff")
 def dropoff_at_branch(package_id: int, data: DropoffRequest, db: Session = Depends(get_db)):
     package = db.get(Package, package_id)
     if not package:
