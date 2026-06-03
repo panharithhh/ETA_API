@@ -26,6 +26,10 @@ class PackageStatus(str, enum.Enum):
     arrived_at_warehouse = "arrived_at_warehouse"
     confirmed = "confirmed"
     rejected = "rejected"
+    # Mid-mile statuses
+    at_warehouse = "at_warehouse"
+    in_transit_w2w = "in_transit_w2w"
+    out_for_delivery = "out_for_delivery"
 
 
 class ConfirmationAction(str, enum.Enum):
@@ -132,3 +136,19 @@ class ConfirmationToken(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class WarehouseInventory(Base):
+    """Tracks which packages are physically sitting at which branch."""
+
+    __tablename__ = "warehouse_inventory"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    package_id: Mapped[int] = mapped_column(ForeignKey("packages.id"), nullable=False, index=True)
+    branch_id: Mapped[int] = mapped_column(ForeignKey("branches.id"), nullable=False, index=True)
+    arrived_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    departed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    package: Mapped[Package] = relationship("Package")
+    branch: Mapped[Branch] = relationship("Branch")
