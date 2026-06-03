@@ -306,8 +306,12 @@ def predict(segment_distance: float, trip_package_count: int, stop_package_count
     }])
     return float(model.predict(features)[0])
 
-# BUG 4 FIX: bare train_model() call at the bottom caused retraining on every import
 if not os.path.exists(MODEL_PATH):
+    if not os.path.exists(DATA_PATH):
+        raise FileNotFoundError(
+            f"Model not found at {MODEL_PATH} and training data not found at {DATA_PATH}. "
+            "Run train_model() locally and commit the pkl files."
+        )
     train_model()
 
 model         = joblib.load(MODEL_PATH)
@@ -318,6 +322,3 @@ courier_speed = (
 )
 X = joblib.load(X_PATH) if os.path.exists(X_PATH) else None
 y = joblib.load(Y_PATH) if os.path.exists(Y_PATH) else None
-
-
-train_model()
