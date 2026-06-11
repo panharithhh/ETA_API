@@ -1,348 +1,326 @@
 """
 Warehouse / mid-mile endpoint tests.
 
-Uses SQLite in-memory DB + FastAPI TestClient. No network calls made.
-Run with: pytest tests/test_warehouse.py -v
+Uses an in-memory mongomock_motor DB + httpx AsyncClient against the ASGI app.
+No network calls made. Run with: pytest tests/test_warehouse.py -v
 """
 
-from datetime import datetime
-from unittest.mock import patch
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, patch
 
-import pytest
+import pytest_asyncio
+from bson import ObjectId
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
+from httpx import ASGITransport, AsyncClient
 
-from database import get_db
-from models.first_mile import (
-    Base, Branch, Package, PackageStatus, WarehouseInventory,
-)
+from db import get_db
+from models.first_mile import BRANCHES, PACKAGES, PackageStatus
 from routes.warehouse import router as warehouse_router
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
-@pytest.fixture
-def db():
-    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
-    Base.metadata.create_all(engine)
-    with Session(engine) as session:
-        yield session
-
-
-@pytest.fixture
-def client(db):
+@pytest_asyncio.fixture
+async def client(db):
     app = FastAPI()
     app.include_router(warehouse_router)
     app.dependency_overrides[get_db] = lambda: db
-    return TestClient(app)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
 
 
 # ── Data helpers ───────────────────────────────────────────────────────────────
 
-def _branch(db: Session, name: str, lat: float = 11.5564, lng: float = 104.9282) -> Branch:
-    b = Branch(name=name, lat=lat, lng=lng)
-    db.add(b)
-    db.flush()
-    return b
+async def _branch(db, name: str, lat: float = 11.5564, lng: float = 104.9282) -> ObjectId:
+    res = await db[BRANCHES].insert_one({"name": name, "lat": lat, "lng": lng})
+    return res.inserted_id
 
 
-def _package(
-    db: Session,
+async def _package(
+    db,
     status: PackageStatus = PackageStatus.at_origin_branch,
-    current_branch_id: int = None,
-    destination_branch_id: int = None,
+    current_branch_id: ObjectId = None,
+    destination_branch_id: ObjectId = None,
     customer_email: str = None,
-) -> Package:
-    p = Package(
-        customer_phone="012345678",
-        receiver_phone="098765432",
-        receiver_lat=11.5564,
-        receiver_lng=104.9282,
-        weight_kg=5,
-        max_dimension_cm=30,
-        status=status,
-        current_branch_id=current_branch_id,
-        destination_branch_id=destination_branch_id,
-        customer_email=customer_email,
-    )
-    db.add(p)
-    db.flush()
-    return p
+    in_warehouse: bool = False,
+) -> ObjectId:
+    doc = {
+        "customer_phone": "012345678",
+        "receiver_phone": "098765432",
+        "receiver_lat": 11.5564,
+        "receiver_lng": 104.9282,
+        "weight_kg": 5,
+        "max_dimension_cm": 30,
+        "status": status.value,
+        "current_branch_id": current_branch_id,
+        "destination_branch_id": destination_branch_id,
+        "customer_email": customer_email,
+    }
+    if in_warehouse:
+        doc["warehouse_arrived_at"] = datetime.now(timezone.utc).replace(tzinfo=None)
+    res = await db[PACKAGES].insert_one(doc)
+    return res.inserted_id
 
 
-def _inventory(db: Session, pkg: Package, branch: Branch, active: bool = True) -> WarehouseInventory:
-    inv = WarehouseInventory(
-        package_id=pkg.id,
-        branch_id=branch.id,
-        arrived_at=datetime.utcnow(),
-        is_active=active,
-        departed_at=None if active else datetime.utcnow(),
-    )
-    db.add(inv)
-    db.flush()
-    return inv
+async def _get_package(db, pkg_id: ObjectId) -> dict:
+    return await db[PACKAGES].find_one({"_id": pkg_id})
 
 
 # ── POST /warehouse/{id}/arrive ────────────────────────────────────────────────
 
 class TestArrive:
-    def test_from_at_origin_branch(self, client, db):
-        branch = _branch(db, "Warehouse A")
-        pkg = _package(db, PackageStatus.at_origin_branch)
+    async def test_from_at_origin_branch(self, client, db):
+        branch = await _branch(db, "Warehouse A")
+        pkg = await _package(db, PackageStatus.at_origin_branch)
 
-        r = client.post(f"/warehouse/{pkg.id}/arrive", json={"branch_id": branch.id})
+        r = await client.post(f"/warehouse/{pkg}/arrive", json={"branch_id": str(branch)})
 
         assert r.status_code == 200
         body = r.json()
         assert body["status"] == "at_warehouse"
-        assert body["branch_id"] == branch.id
+        assert body["branch_id"] == str(branch)
 
-        db.expire_all()
-        updated = db.get(Package, pkg.id)
-        assert updated.status == PackageStatus.at_warehouse
-        assert updated.current_branch_id == branch.id
+        updated = await _get_package(db, pkg)
+        assert updated["status"] == PackageStatus.at_warehouse.value
+        assert updated["current_branch_id"] == branch
+        assert updated["warehouse_arrived_at"] is not None
 
-        inv = db.query(WarehouseInventory).filter_by(package_id=pkg.id).one()
-        assert inv.is_active is True
-        assert inv.arrived_at is not None
+    async def test_from_in_transit_w2w(self, client, db):
+        branch = await _branch(db, "Warehouse B")
+        pkg = await _package(db, PackageStatus.in_transit_w2w)
 
-    def test_from_in_transit_w2w(self, client, db):
-        branch = _branch(db, "Warehouse B")
-        pkg = _package(db, PackageStatus.in_transit_w2w)
-
-        r = client.post(f"/warehouse/{pkg.id}/arrive", json={"branch_id": branch.id})
+        r = await client.post(f"/warehouse/{pkg}/arrive", json={"branch_id": str(branch)})
 
         assert r.status_code == 200
         assert r.json()["status"] == "at_warehouse"
 
-    def test_wrong_status_returns_409(self, client, db):
-        branch = _branch(db, "Warehouse C")
-        pkg = _package(db, PackageStatus.picked_up)
+    async def test_wrong_status_returns_409(self, client, db):
+        branch = await _branch(db, "Warehouse C")
+        pkg = await _package(db, PackageStatus.picked_up)
 
-        r = client.post(f"/warehouse/{pkg.id}/arrive", json={"branch_id": branch.id})
+        r = await client.post(f"/warehouse/{pkg}/arrive", json={"branch_id": str(branch)})
 
         assert r.status_code == 409
         assert "picked_up" in r.json()["detail"]
 
-    def test_package_not_found_returns_404(self, client, db):
-        branch = _branch(db, "Warehouse D")
-        r = client.post("/warehouse/9999/arrive", json={"branch_id": branch.id})
+    async def test_package_not_found_returns_404(self, client, db):
+        branch = await _branch(db, "Warehouse D")
+        r = await client.post(f"/warehouse/{ObjectId()}/arrive", json={"branch_id": str(branch)})
         assert r.status_code == 404
 
-    def test_branch_not_found_returns_404(self, client, db):
-        pkg = _package(db, PackageStatus.at_origin_branch)
-        r = client.post(f"/warehouse/{pkg.id}/arrive", json={"branch_id": 9999})
+    async def test_branch_not_found_returns_404(self, client, db):
+        pkg = await _package(db, PackageStatus.at_origin_branch)
+        r = await client.post(f"/warehouse/{pkg}/arrive", json={"branch_id": str(ObjectId())})
         assert r.status_code == 404
 
-    def test_email_fires_at_destination_warehouse(self, client, db):
-        branch = _branch(db, "Dest Warehouse")
-        pkg = _package(
+    async def test_email_fires_at_destination_warehouse(self, client, db):
+        branch = await _branch(db, "Dest Warehouse")
+        pkg = await _package(
             db,
             PackageStatus.at_origin_branch,
-            destination_branch_id=branch.id,
+            destination_branch_id=branch,
             customer_email="customer@example.com",
         )
 
-        with patch("routes.warehouse.trigger_warehouse_arrival_email") as mock_email:
-            r = client.post(f"/warehouse/{pkg.id}/arrive", json={"branch_id": branch.id})
+        with patch("routes.warehouse.trigger_warehouse_arrival_email", new_callable=AsyncMock) as mock_email:
+            r = await client.post(f"/warehouse/{pkg}/arrive", json={"branch_id": str(branch)})
 
         assert r.status_code == 200
         assert r.json()["is_destination_warehouse"] is True
         assert r.json()["confirmation_email_sent"] is True
-        mock_email.assert_called_once()
+        mock_email.assert_awaited_once()
 
-    def test_no_email_at_transit_warehouse(self, client, db):
-        transit = _branch(db, "Transit Warehouse")
-        dest = _branch(db, "Dest Warehouse")
-        pkg = _package(
+    async def test_no_email_at_transit_warehouse(self, client, db):
+        transit = await _branch(db, "Transit Warehouse")
+        dest = await _branch(db, "Dest Warehouse")
+        pkg = await _package(
             db,
             PackageStatus.at_origin_branch,
-            destination_branch_id=dest.id,
+            destination_branch_id=dest,
             customer_email="customer@example.com",
         )
 
-        with patch("routes.warehouse.trigger_warehouse_arrival_email") as mock_email:
-            r = client.post(f"/warehouse/{pkg.id}/arrive", json={"branch_id": transit.id})
+        with patch("routes.warehouse.trigger_warehouse_arrival_email", new_callable=AsyncMock) as mock_email:
+            r = await client.post(f"/warehouse/{pkg}/arrive", json={"branch_id": str(transit)})
 
         assert r.status_code == 200
         assert r.json()["is_destination_warehouse"] is False
         assert r.json()["confirmation_email_sent"] is False
         mock_email.assert_not_called()
 
-    def test_no_email_when_customer_email_missing(self, client, db):
-        branch = _branch(db, "Warehouse E")
-        pkg = _package(
+    async def test_no_email_when_customer_email_missing(self, client, db):
+        branch = await _branch(db, "Warehouse E")
+        pkg = await _package(
             db,
             PackageStatus.at_origin_branch,
-            destination_branch_id=branch.id,
+            destination_branch_id=branch,
             customer_email=None,
         )
 
-        with patch("routes.warehouse.trigger_warehouse_arrival_email") as mock_email:
-            r = client.post(f"/warehouse/{pkg.id}/arrive", json={"branch_id": branch.id})
+        with patch("routes.warehouse.trigger_warehouse_arrival_email", new_callable=AsyncMock) as mock_email:
+            r = await client.post(f"/warehouse/{pkg}/arrive", json={"branch_id": str(branch)})
 
         assert r.status_code == 200
         assert r.json()["confirmation_email_sent"] is False
         mock_email.assert_not_called()
 
-    def test_email_failure_does_not_rollback_arrival(self, client, db):
-        branch = _branch(db, "Warehouse F")
-        pkg = _package(
+    async def test_email_failure_does_not_rollback_arrival(self, client, db):
+        branch = await _branch(db, "Warehouse F")
+        pkg = await _package(
             db,
             PackageStatus.at_origin_branch,
-            destination_branch_id=branch.id,
+            destination_branch_id=branch,
             customer_email="customer@example.com",
         )
 
-        with patch("routes.warehouse.trigger_warehouse_arrival_email", side_effect=Exception("SMTP down")):
-            r = client.post(f"/warehouse/{pkg.id}/arrive", json={"branch_id": branch.id})
+        with patch(
+            "routes.warehouse.trigger_warehouse_arrival_email",
+            new_callable=AsyncMock,
+            side_effect=Exception("SMTP down"),
+        ):
+            r = await client.post(f"/warehouse/{pkg}/arrive", json={"branch_id": str(branch)})
 
         assert r.status_code == 200
         assert r.json()["confirmation_email_sent"] is False
 
-        db.expire_all()
-        assert db.get(Package, pkg.id).status == PackageStatus.at_warehouse
+        assert (await _get_package(db, pkg))["status"] == PackageStatus.at_warehouse.value
 
 
 # ── POST /warehouse/{id}/depart ────────────────────────────────────────────────
 
 class TestDepart:
-    def _at_warehouse(self, db: Session, branch: Branch) -> Package:
-        pkg = _package(db, PackageStatus.at_warehouse, current_branch_id=branch.id)
-        _inventory(db, pkg, branch, active=True)
-        return pkg
+    async def _at_warehouse(self, db, branch: ObjectId) -> ObjectId:
+        return await _package(
+            db, PackageStatus.at_warehouse, current_branch_id=branch, in_warehouse=True
+        )
 
-    def test_final_leg_sets_out_for_delivery(self, client, db):
-        branch = _branch(db, "Last Warehouse")
-        pkg = self._at_warehouse(db, branch)
+    async def test_final_leg_sets_out_for_delivery(self, client, db):
+        branch = await _branch(db, "Last Warehouse")
+        pkg = await self._at_warehouse(db, branch)
 
-        r = client.post(f"/warehouse/{pkg.id}/depart", json={})
+        r = await client.post(f"/warehouse/{pkg}/depart", json={})
 
         assert r.status_code == 200
         assert r.json()["status"] == "out_for_delivery"
 
-        db.expire_all()
-        assert db.get(Package, pkg.id).status == PackageStatus.out_for_delivery
+        updated = await _get_package(db, pkg)
+        assert updated["status"] == PackageStatus.out_for_delivery.value
+        assert "warehouse_arrived_at" not in updated
 
-        inv = db.query(WarehouseInventory).filter_by(package_id=pkg.id).one()
-        assert inv.is_active is False
-        assert inv.departed_at is not None
+        # No longer shows in the branch inventory
+        inv = await client.get(f"/warehouse/{branch}/inventory")
+        assert inv.json()["count"] == 0
 
-    def test_w2w_leg_sets_in_transit(self, client, db):
-        origin = _branch(db, "WH Origin", lat=11.55, lng=104.92)
-        dest = _branch(db, "WH Dest", lat=12.10, lng=105.50)
-        pkg = self._at_warehouse(db, origin)
+    async def test_w2w_leg_sets_in_transit(self, client, db):
+        origin = await _branch(db, "WH Origin", lat=11.55, lng=104.92)
+        dest = await _branch(db, "WH Dest", lat=12.10, lng=105.50)
+        pkg = await self._at_warehouse(db, origin)
 
         # 75 km road distance → (75 / 25) * 60 = 180 min
         with patch("routes.warehouse._osrm_route", return_value={"distance": 75000}):
-            r = client.post(f"/warehouse/{pkg.id}/depart", json={"to_branch_id": dest.id})
+            r = await client.post(f"/warehouse/{pkg}/depart", json={"to_branch_id": str(dest)})
 
         assert r.status_code == 200
         body = r.json()
         assert body["status"] == "in_transit_w2w"
-        assert body["to_branch_id"] == dest.id
+        assert body["to_branch_id"] == str(dest)
         assert body["to_branch_name"] == "WH Dest"
         assert body["estimated_travel_min"] == 180.0
 
-        db.expire_all()
-        assert db.get(Package, pkg.id).status == PackageStatus.in_transit_w2w
+        assert (await _get_package(db, pkg))["status"] == PackageStatus.in_transit_w2w.value
 
-    def test_w2w_osrm_failure_falls_back_to_haversine(self, client, db):
-        origin = _branch(db, "WH North", lat=11.55, lng=104.92)
-        dest = _branch(db, "WH South", lat=11.60, lng=104.95)
-        pkg = self._at_warehouse(db, origin)
+    async def test_w2w_osrm_failure_falls_back_to_haversine(self, client, db):
+        origin = await _branch(db, "WH North", lat=11.55, lng=104.92)
+        dest = await _branch(db, "WH South", lat=11.60, lng=104.95)
+        pkg = await self._at_warehouse(db, origin)
 
         with patch("routes.warehouse._osrm_route", side_effect=Exception("OSRM down")):
-            r = client.post(f"/warehouse/{pkg.id}/depart", json={"to_branch_id": dest.id})
+            r = await client.post(f"/warehouse/{pkg}/depart", json={"to_branch_id": str(dest)})
 
         assert r.status_code == 200
         body = r.json()
         assert body["status"] == "in_transit_w2w"
         assert body["estimated_travel_min"] > 0  # haversine fallback produced a value
 
-    def test_wrong_status_returns_409(self, client, db):
-        branch = _branch(db, "Warehouse G")
-        pkg = _package(db, PackageStatus.at_origin_branch, current_branch_id=branch.id)
+    async def test_wrong_status_returns_409(self, client, db):
+        branch = await _branch(db, "Warehouse G")
+        pkg = await _package(db, PackageStatus.at_origin_branch, current_branch_id=branch)
 
-        r = client.post(f"/warehouse/{pkg.id}/depart", json={})
+        r = await client.post(f"/warehouse/{pkg}/depart", json={})
 
         assert r.status_code == 409
         assert "at_origin_branch" in r.json()["detail"]
 
-    def test_package_not_found_returns_404(self, client, db):
-        r = client.post("/warehouse/9999/depart", json={})
+    async def test_package_not_found_returns_404(self, client, db):
+        r = await client.post(f"/warehouse/{ObjectId()}/depart", json={})
         assert r.status_code == 404
 
-    def test_to_branch_not_found_returns_404(self, client, db):
-        branch = _branch(db, "Warehouse H")
-        pkg = self._at_warehouse(db, branch)
+    async def test_to_branch_not_found_returns_404(self, client, db):
+        branch = await _branch(db, "Warehouse H")
+        pkg = await self._at_warehouse(db, branch)
 
-        r = client.post(f"/warehouse/{pkg.id}/depart", json={"to_branch_id": 9999})
+        r = await client.post(f"/warehouse/{pkg}/depart", json={"to_branch_id": str(ObjectId())})
         assert r.status_code == 404
 
 
 # ── GET /warehouse/{branch_id}/inventory ──────────────────────────────────────
 
 class TestInventory:
-    def test_returns_active_packages(self, client, db):
-        branch = _branch(db, "Central WH")
-        pkg1 = _package(db, PackageStatus.at_warehouse, current_branch_id=branch.id)
-        pkg2 = _package(db, PackageStatus.at_warehouse, current_branch_id=branch.id)
-        _inventory(db, pkg1, branch)
-        _inventory(db, pkg2, branch)
+    async def test_returns_active_packages(self, client, db):
+        branch = await _branch(db, "Central WH")
+        pkg1 = await _package(db, PackageStatus.at_warehouse, current_branch_id=branch, in_warehouse=True)
+        pkg2 = await _package(db, PackageStatus.at_warehouse, current_branch_id=branch, in_warehouse=True)
 
-        r = client.get(f"/warehouse/{branch.id}/inventory")
+        r = await client.get(f"/warehouse/{branch}/inventory")
 
         assert r.status_code == 200
         body = r.json()
-        assert body["branch_id"] == branch.id
+        assert body["branch_id"] == str(branch)
         assert body["branch_name"] == "Central WH"
         assert body["count"] == 2
         ids = {p["package_id"] for p in body["packages"]}
-        assert ids == {pkg1.id, pkg2.id}
+        assert ids == {str(pkg1), str(pkg2)}
 
-    def test_excludes_departed_packages(self, client, db):
-        branch = _branch(db, "Mixed WH")
-        active_pkg = _package(db, PackageStatus.at_warehouse, current_branch_id=branch.id)
-        gone_pkg = _package(db, PackageStatus.in_transit_w2w, current_branch_id=branch.id)
-        _inventory(db, active_pkg, branch, active=True)
-        _inventory(db, gone_pkg, branch, active=False)
+    async def test_excludes_departed_packages(self, client, db):
+        branch = await _branch(db, "Mixed WH")
+        active_pkg = await _package(db, PackageStatus.at_warehouse, current_branch_id=branch, in_warehouse=True)
+        # A departed package is no longer at_warehouse → excluded by the live query
+        await _package(db, PackageStatus.in_transit_w2w, current_branch_id=branch)
 
-        r = client.get(f"/warehouse/{branch.id}/inventory")
+        r = await client.get(f"/warehouse/{branch}/inventory")
 
         assert r.status_code == 200
         body = r.json()
         assert body["count"] == 1
-        assert body["packages"][0]["package_id"] == active_pkg.id
+        assert body["packages"][0]["package_id"] == str(active_pkg)
 
-    def test_empty_warehouse_returns_zero(self, client, db):
-        branch = _branch(db, "Empty WH")
+    async def test_empty_warehouse_returns_zero(self, client, db):
+        branch = await _branch(db, "Empty WH")
 
-        r = client.get(f"/warehouse/{branch.id}/inventory")
+        r = await client.get(f"/warehouse/{branch}/inventory")
 
         assert r.status_code == 200
         body = r.json()
         assert body["count"] == 0
         assert body["packages"] == []
 
-    def test_branch_not_found_returns_404(self, client, db):
-        r = client.get("/warehouse/9999/inventory")
+    async def test_branch_not_found_returns_404(self, client, db):
+        r = await client.get(f"/warehouse/{ObjectId()}/inventory")
         assert r.status_code == 404
 
-    def test_response_includes_expected_fields(self, client, db):
-        branch = _branch(db, "Field Check WH")
-        dest = _branch(db, "Dest Branch")
-        pkg = _package(
+    async def test_response_includes_expected_fields(self, client, db):
+        branch = await _branch(db, "Field Check WH")
+        dest = await _branch(db, "Dest Branch")
+        await _package(
             db,
             PackageStatus.at_warehouse,
-            current_branch_id=branch.id,
-            destination_branch_id=dest.id,
+            current_branch_id=branch,
+            destination_branch_id=dest,
+            in_warehouse=True,
         )
-        _inventory(db, pkg, branch)
 
-        r = client.get(f"/warehouse/{branch.id}/inventory")
+        r = await client.get(f"/warehouse/{branch}/inventory")
 
         item = r.json()["packages"][0]
         assert "inventory_id" in item
@@ -357,7 +335,7 @@ class TestInventory:
 # ── Full lifecycle chain ───────────────────────────────────────────────────────
 
 class TestFullLifecycle:
-    def test_origin_transit_warehouse_delivery(self, client, db):
+    async def test_origin_transit_warehouse_delivery(self, client, db):
         """
         at_origin_branch
           → arrive WH-A (no email, not destination)
@@ -366,52 +344,51 @@ class TestFullLifecycle:
           → depart final leg (out_for_delivery)
           → both warehouse inventories empty
         """
-        wh_a = _branch(db, "Warehouse A", lat=11.55, lng=104.92)
-        wh_b = _branch(db, "Warehouse B", lat=12.10, lng=105.50)
+        wh_a = await _branch(db, "Warehouse A", lat=11.55, lng=104.92)
+        wh_b = await _branch(db, "Warehouse B", lat=12.10, lng=105.50)
 
-        pkg = _package(
+        pkg = await _package(
             db,
             PackageStatus.at_origin_branch,
-            destination_branch_id=wh_b.id,
+            destination_branch_id=wh_b,
             customer_email="receiver@example.com",
         )
 
         # Step 1 — arrive at WH-A (transit, no email)
-        with patch("routes.warehouse.trigger_warehouse_arrival_email") as mock_email:
-            r = client.post(f"/warehouse/{pkg.id}/arrive", json={"branch_id": wh_a.id})
+        with patch("routes.warehouse.trigger_warehouse_arrival_email", new_callable=AsyncMock) as mock_email:
+            r = await client.post(f"/warehouse/{pkg}/arrive", json={"branch_id": str(wh_a)})
         assert r.status_code == 200
         assert r.json()["is_destination_warehouse"] is False
         mock_email.assert_not_called()
 
         # Step 2 — depart WH-A to WH-B, 100 km → 240 min
         with patch("routes.warehouse._osrm_route", return_value={"distance": 100_000}):
-            r = client.post(f"/warehouse/{pkg.id}/depart", json={"to_branch_id": wh_b.id})
+            r = await client.post(f"/warehouse/{pkg}/depart", json={"to_branch_id": str(wh_b)})
         assert r.status_code == 200
         assert r.json()["status"] == "in_transit_w2w"
         assert r.json()["estimated_travel_min"] == 240.0
 
-        # WH-A inventory now inactive
-        assert client.get(f"/warehouse/{wh_a.id}/inventory").json()["count"] == 0
+        # WH-A inventory now empty
+        assert (await client.get(f"/warehouse/{wh_a}/inventory")).json()["count"] == 0
 
         # Step 3 — arrive at WH-B (destination → email)
-        with patch("routes.warehouse.trigger_warehouse_arrival_email") as mock_email:
-            r = client.post(f"/warehouse/{pkg.id}/arrive", json={"branch_id": wh_b.id})
+        with patch("routes.warehouse.trigger_warehouse_arrival_email", new_callable=AsyncMock) as mock_email:
+            r = await client.post(f"/warehouse/{pkg}/arrive", json={"branch_id": str(wh_b)})
         assert r.status_code == 200
         assert r.json()["is_destination_warehouse"] is True
         assert r.json()["confirmation_email_sent"] is True
-        mock_email.assert_called_once()
+        mock_email.assert_awaited_once()
 
         # WH-B inventory now has 1 package
-        assert client.get(f"/warehouse/{wh_b.id}/inventory").json()["count"] == 1
+        assert (await client.get(f"/warehouse/{wh_b}/inventory")).json()["count"] == 1
 
         # Step 4 — final dispatch
-        r = client.post(f"/warehouse/{pkg.id}/depart", json={})
+        r = await client.post(f"/warehouse/{pkg}/depart", json={})
         assert r.status_code == 200
         assert r.json()["status"] == "out_for_delivery"
 
         # Both warehouses empty
-        assert client.get(f"/warehouse/{wh_a.id}/inventory").json()["count"] == 0
-        assert client.get(f"/warehouse/{wh_b.id}/inventory").json()["count"] == 0
+        assert (await client.get(f"/warehouse/{wh_a}/inventory")).json()["count"] == 0
+        assert (await client.get(f"/warehouse/{wh_b}/inventory")).json()["count"] == 0
 
-        db.expire_all()
-        assert db.get(Package, pkg.id).status == PackageStatus.out_for_delivery
+        assert (await _get_package(db, pkg))["status"] == PackageStatus.out_for_delivery.value

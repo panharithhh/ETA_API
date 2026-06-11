@@ -1,60 +1,39 @@
 import os
-import psycopg2
 
-def get_conn():
-    url = os.getenv("DATABASE_URL", "")
-    if url.startswith("postgres://"):
-        url = url.replace("postgres://", "postgresql://", 1)
-    return psycopg2.connect(url)
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+from pymongo.errors import ConfigurationError
 
-def init_db():
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS predictions (
-                    order_id         INTEGER PRIMARY KEY,
-                    accept_time      TIMESTAMP,
-                    accept_gps_lng   DOUBLE PRECISION,
-                    accept_gps_lat   DOUBLE PRECISION,
-                    delivery_gps_lng DOUBLE PRECISION,
-                    delivery_gps_lat DOUBLE PRECISION,
-                    stop_package_count INTEGER,
-                    stop_index       INTEGER,
-                    remaining_stops  INTEGER,
-                    segment_distance DOUBLE PRECISION,
-                    predicted_min    DOUBLE PRECISION,
-                    eta              TEXT,
-                    delivery_time    TIMESTAMP
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS delivery_log (
-                    id               SERIAL PRIMARY KEY,
-                    order_id         INTEGER,
-                    courier_id       TEXT,
-                    accept_time      TIMESTAMP,
-                    accept_gps_lng   DOUBLE PRECISION,
-                    accept_gps_lat   DOUBLE PRECISION,
-                    delivery_gps_lng DOUBLE PRECISION,
-                    delivery_gps_lat DOUBLE PRECISION,
-                    stop_package_count INTEGER,
-                    predicted_minutes  DOUBLE PRECISION,
-                    eta              TEXT,
-                    delivery_time    TIMESTAMP
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS c2c_log (
-                    order_id        INTEGER PRIMARY KEY,
-                    courier_rating  DOUBLE PRECISION,
-                    pickup_lat      DOUBLE PRECISION,
-                    pickup_lon      DOUBLE PRECISION,
-                    delivery_lat    DOUBLE PRECISION,
-                    delivery_lon    DOUBLE PRECISION,
-                    distance_km     DOUBLE PRECISION,
-                    accept_time     TIMESTAMP,
-                    predicted_min   DOUBLE PRECISION,
-                    delivery_time   TIMESTAMP
-                )
-            """)
-        conn.commit()
+# ── Connection ────────────────────────────────────────────────────────────────
+# MONGODB_URI (preferred) or legacy MONGO_URI. The URI carries the default db
+# name (…/chonhchoun); fall back to a local mongod + "chonchoun" db otherwise.
+_MONGO_URI = os.getenv("MONGODB_URI") or os.getenv("MONGO_URI", "mongodb://localhost:27017")
+_DEFAULT_DB_NAME = "chonchoun"
+
+_client = AsyncIOMotorClient(_MONGO_URI)
+
+try:
+    _db: AsyncIOMotorDatabase = _client.get_default_database()
+except ConfigurationError:  # URI carried no default db name
+    _db = None
+if _db is None:
+    _db = _client[_DEFAULT_DB_NAME]
+
+
+def get_db() -> AsyncIOMotorDatabase:
+    """FastAPI dependency — returns the shared Motor database handle.
+
+    Tests override this via app.dependency_overrides[get_db].
+    """
+    return _db
+
+
+async def init_db() -> None:
+    """Create indexes. Idempotent — safe to run on every startup."""
+    await _db.predictions.create_index("order_id", unique=True)
+    await _db.delivery_log.create_index("order_id")
+    await _db.c2c_log.create_index("order_id", unique=True)
+    await _db.confirmation_tokens.create_index("token", unique=True)
+    await _db.packages.create_index("status")
+    await _db.packages.create_index([("status", 1), ("current_branch_id", 1)])
+    await _db.package_events.create_index("package_id")
+    await _db.drivers.create_index("vehicle_id")

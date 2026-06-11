@@ -1,10 +1,17 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select, func
-from sqlalchemy.orm import Session
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from models.first_mile import Branch, Driver, Package, PackageEvent, PackageStatus, Vehicle, VehicleType
+from models.first_mile import (
+    BRANCHES,
+    DRIVERS,
+    PACKAGE_EVENTS,
+    PACKAGES,
+    VEHICLES,
+    PackageStatus,
+    VehicleType,
+)
 from utils.geo import haversine
 
 PP_TZ = ZoneInfo("Asia/Phnom_Penh")
@@ -40,47 +47,50 @@ def _score(dist_km: float, pending: int, tier: VehicleType, dt: datetime) -> flo
     return dist_km * cost * multiplier + pending * 2
 
 
-def _pending_count(driver_id: int, db: Session) -> int:
-    return db.scalar(
-        select(func.count(Package.id)).where(
-            Package.assigned_driver_id == driver_id,
-            Package.status.in_([PackageStatus.pending_pickup, PackageStatus.picked_up]),
-        )
-    ) or 0
+async def _pending_count(driver_id, db: AsyncIOMotorDatabase) -> int:
+    return await db[PACKAGES].count_documents({
+        "assigned_driver_id": driver_id,
+        "status": {"$in": [PackageStatus.pending_pickup.value, PackageStatus.picked_up.value]},
+    })
 
 
-def _drivers_within_radius(
-    lat: float, lng: float, tier: VehicleType, db: Session
-) -> list[tuple[Driver, float]]:
-    rows = db.execute(
-        select(Driver).join(Vehicle, Driver.vehicle_id == Vehicle.id).where(
-            Vehicle.vehicle_type == tier,
-            Driver.is_available == True,
-            Vehicle.is_available == True,
-            Driver.current_lat.isnot(None),
-            Driver.current_lng.isnot(None),
-        )
-    ).scalars().all()
+async def _drivers_within_radius(
+    lat: float, lng: float, tier: VehicleType, db: AsyncIOMotorDatabase
+) -> list[tuple[dict, float]]:
+    vehicle_ids = await db[VEHICLES].distinct("_id", {
+        "vehicle_type": tier.value,
+        "is_available": True,
+    })
+    if not vehicle_ids:
+        return []
+
+    cursor = db[DRIVERS].find({
+        "vehicle_id": {"$in": vehicle_ids},
+        "is_available": True,
+        "current_lat": {"$ne": None},
+        "current_lng": {"$ne": None},
+    })
+    drivers = await cursor.to_list(length=None)
 
     return [
         (d, dist)
-        for d in rows
-        if (dist := haversine(lat, lng, d.current_lat, d.current_lng)) <= RADIUS_KM
+        for d in drivers
+        if (dist := haversine(lat, lng, d["current_lat"], d["current_lng"])) <= RADIUS_KM
     ]
 
 
-def _nearest_branch(lat: float, lng: float, db: Session) -> Branch | None:
-    branches = db.execute(select(Branch)).scalars().all()
+async def _nearest_branch(lat: float, lng: float, db: AsyncIOMotorDatabase) -> dict | None:
+    branches = await db[BRANCHES].find().to_list(length=None)
     if not branches:
         return None
-    return min(branches, key=lambda b: haversine(lat, lng, b.lat, b.lng))
+    return min(branches, key=lambda b: haversine(lat, lng, b["lat"], b["lng"]))
 
 
-def assign_pickup(package: Package, db: Session, now: datetime | None = None) -> dict:
+async def assign_pickup(package: dict, db: AsyncIOMotorDatabase, now: datetime | None = None) -> dict:
     if now is None:
         now = datetime.now(PP_TZ)
 
-    eligible = _eligible_tiers(package.weight_kg, package.max_dimension_cm)
+    eligible = _eligible_tiers(package["weight_kg"], package["max_dimension_cm"])
     if not eligible:
         raise ValueError("Package exceeds all vehicle capacities")
 
@@ -91,55 +101,61 @@ def assign_pickup(package: Package, db: Session, now: datetime | None = None) ->
         return {
             "type": "scheduled",
             "vehicle_type": VehicleType.container,
-            "pickup_window_start": package.pickup_window_start,
-            "pickup_window_end": package.pickup_window_end,
+            "pickup_window_start": package.get("pickup_window_start"),
+            "pickup_window_end": package.get("pickup_window_end"),
             "message": "Package requires container — 12-hour lead time, scheduled booking",
         }
 
     # Fallback chain: motorbike → tuktuk → van
     for tier in realtime_eligible:
-        candidates = _drivers_within_radius(package.receiver_lat, package.receiver_lng, tier, db)
+        candidates = await _drivers_within_radius(
+            package["receiver_lat"], package["receiver_lng"], tier, db
+        )
         if not candidates:
             continue
 
-        best_driver, best_dist = min(
-            candidates,
-            key=lambda x: _score(x[1], _pending_count(x[0].id, db), tier, now),
-        )
+        scored = [
+            (driver, dist, _score(dist, await _pending_count(driver["_id"], db), tier, now))
+            for driver, dist in candidates
+        ]
+        best_driver, best_dist, _ = min(scored, key=lambda x: x[2])
 
-        package.assigned_driver_id = best_driver.id
-        package.assigned_vehicle_id = best_driver.vehicle_id
-        package.status = PackageStatus.pending_pickup
-        db.add(PackageEvent(
-            package_id=package.id,
-            status=PackageStatus.pending_pickup,
-            driver_id=best_driver.id,
-            notes=f"Auto-assigned {tier.value}, dist={best_dist:.2f}km",
-        ))
-        db.commit()
-        db.refresh(package)
+        await db[PACKAGES].update_one(
+            {"_id": package["_id"]},
+            {"$set": {
+                "assigned_driver_id": best_driver["_id"],
+                "assigned_vehicle_id": best_driver.get("vehicle_id"),
+                "status": PackageStatus.pending_pickup.value,
+            }},
+        )
+        await db[PACKAGE_EVENTS].insert_one({
+            "package_id": package["_id"],
+            "status": PackageStatus.pending_pickup.value,
+            "driver_id": best_driver["_id"],
+            "notes": f"Auto-assigned {tier.value}, dist={best_dist:.2f}km",
+            "created_at": now.replace(tzinfo=None),
+        })
 
         return {
             "type": "assigned",
-            "package_id": package.id,
-            "status": package.status,
+            "package_id": str(package["_id"]),
+            "status": PackageStatus.pending_pickup.value,
             "vehicle_type": tier,
-            "driver_id": best_driver.id,
-            "driver_phone": best_driver.phone,
+            "driver_id": str(best_driver["_id"]),
+            "driver_phone": best_driver["phone"],
             "distance_km": round(best_dist, 2),
         }
 
     # All real-time tiers exhausted → drop at branch
-    db.commit()
-    branch = _nearest_branch(package.receiver_lat, package.receiver_lng, db)
+    branch = await _nearest_branch(package["receiver_lat"], package["receiver_lng"], db)
     return {
         "type": "drop_at_branch",
-        "package_id": package.id,
+        "package_id": str(package["_id"]),
         "message": "No driver available within 15 km. Please drop the package at the nearest branch.",
         "nearest_branch": {
-            "id": branch.id if branch else None,
-            "name": branch.name if branch else "N/A",
-            "lat": branch.lat if branch else None,
-            "lng": branch.lng if branch else None,
+            "id": str(branch["_id"]) if branch else None,
+            "name": branch["name"] if branch else "N/A",
+            "lat": branch["lat"] if branch else None,
+            "lng": branch["lng"] if branch else None,
         },
     }

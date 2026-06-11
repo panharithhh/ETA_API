@@ -4,9 +4,10 @@ from datetime import datetime, timedelta
 from typing import List
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, HTTPException, Security
+from fastapi import APIRouter, Depends, HTTPException, Security
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from db import get_conn
+from db import get_db
 from model import train_model as tmd, predict as predict_fn, haversine, MODEL_PATH, DATA_PATH
 from retrain import retrain_delivery as retrain_delivery_fn
 from schema import (
@@ -128,7 +129,7 @@ def train_model():
 
 
 @router.post("/accept")
-def accept_delivery(data: AcceptDeliveryInput):
+async def accept_delivery(data: AcceptDeliveryInput, db: AsyncIOMotorDatabase = Depends(get_db)):
     record = prediction_store.pop(data.order_id, None)
     if record is None:
         raise HTTPException(status_code=404, detail=f"No pending prediction for order {data.order_id}")
@@ -136,42 +137,37 @@ def accept_delivery(data: AcceptDeliveryInput):
     delivery_time = datetime.now(ZoneInfo("Asia/Phnom_Penh")).strftime("%Y-%m-%d %H:%M:%S")
     record["delivery_time"] = delivery_time
 
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO delivery_log
-                    (order_id, courier_id, accept_time, accept_gps_lng, accept_gps_lat,
-                     delivery_gps_lng, delivery_gps_lat, stop_package_count, predicted_minutes, eta, delivery_time)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    int(record["order_id"]), str(record["courier_id"]), record["accept_time"],
-                    float(record["accept_gps_lng"]), float(record["accept_gps_lat"]),
-                    float(record["delivery_gps_lng"]), float(record["delivery_gps_lat"]),
-                    int(record["stop_package_count"]), float(record["predicted_minutes"]),
-                    record["eta"], delivery_time,
-                ),
-            )
-            cur.execute(
-                "UPDATE predictions SET delivery_time = %s WHERE order_id = %s",
-                (delivery_time, data.order_id),
-            )
-        conn.commit()
+    await db.delivery_log.insert_one({
+        "order_id": int(record["order_id"]),
+        "courier_id": str(record["courier_id"]),
+        "accept_time": record["accept_time"],
+        "accept_gps_lng": float(record["accept_gps_lng"]),
+        "accept_gps_lat": float(record["accept_gps_lat"]),
+        "delivery_gps_lng": float(record["delivery_gps_lng"]),
+        "delivery_gps_lat": float(record["delivery_gps_lat"]),
+        "stop_package_count": int(record["stop_package_count"]),
+        "predicted_minutes": float(record["predicted_minutes"]),
+        "eta": record["eta"],
+        "delivery_time": delivery_time,
+    })
+    await db.predictions.update_one(
+        {"order_id": data.order_id},
+        {"$set": {"delivery_time": delivery_time}},
+    )
 
     return {"status": "recorded", "order_id": data.order_id}
 
 
 @router.post("/retrain", dependencies=[Security(verify_api_key)])
-def retrain():
-    ok = retrain_delivery_fn()
+async def retrain(db: AsyncIOMotorDatabase = Depends(get_db)):
+    ok = await retrain_delivery_fn(db)
     if ok:
         return {"status": "successfully retrained"}
     return {"status": "retrain failed"}
 
 
 @router.post("/auto-mapping", dependencies=[Security(verify_api_key)])
-def auto_mapping(data: AutoMapingInput):
+async def auto_mapping(data: AutoMapingInput, db: AsyncIOMotorDatabase = Depends(get_db)):
     if not data.stops:
         raise HTTPException(status_code=400, detail="No stops provided")
     if not data.drivers:
@@ -246,29 +242,27 @@ def auto_mapping(data: AutoMapingInput):
 
         trip_package_count, deliveries = _run_predictions(batch)
 
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                for d in deliveries:
-                    rec = prediction_store[d["order_id"]]
-                    cur.execute(
-                        """
-                        INSERT INTO predictions
-                            (order_id, accept_time, accept_gps_lng, accept_gps_lat,
-                             delivery_gps_lng, delivery_gps_lat, stop_package_count,
-                             stop_index, remaining_stops, segment_distance, predicted_min, eta)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (order_id) DO NOTHING
-                        """,
-                        (
-                            int(rec["order_id"]), rec["accept_time"], float(rec["accept_gps_lng"]),
-                            float(rec["accept_gps_lat"]), float(rec["delivery_gps_lng"]),
-                            float(rec["delivery_gps_lat"]), int(rec["stop_package_count"]),
-                            int(rec["stop_index"]), int(rec["remaining_stops"]),
-                            float(rec["segment_distance"]), float(rec["predicted_minutes"]),
-                            d["display"]["eta"],
-                        ),
-                    )
-            conn.commit()
+        for d in deliveries:
+            rec = prediction_store[d["order_id"]]
+            # $setOnInsert + upsert == INSERT … ON CONFLICT (order_id) DO NOTHING
+            await db.predictions.update_one(
+                {"order_id": int(rec["order_id"])},
+                {"$setOnInsert": {
+                    "order_id": int(rec["order_id"]),
+                    "accept_time": rec["accept_time"],
+                    "accept_gps_lng": float(rec["accept_gps_lng"]),
+                    "accept_gps_lat": float(rec["accept_gps_lat"]),
+                    "delivery_gps_lng": float(rec["delivery_gps_lng"]),
+                    "delivery_gps_lat": float(rec["delivery_gps_lat"]),
+                    "stop_package_count": int(rec["stop_package_count"]),
+                    "stop_index": int(rec["stop_index"]),
+                    "remaining_stops": int(rec["remaining_stops"]),
+                    "segment_distance": float(rec["segment_distance"]),
+                    "predicted_min": float(rec["predicted_minutes"]),
+                    "eta": d["display"]["eta"],
+                }},
+                upsert=True,
+            )
 
         results.append({
             "driver_id": driver.driver_id,

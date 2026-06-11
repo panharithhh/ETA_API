@@ -4,21 +4,25 @@ from sklearn.ensemble import RandomForestRegressor
 import joblib
 import os
 import model as m
-from db import get_conn
 
-def retrain_delivery() -> bool:
-    with get_conn() as conn:
-        df = pd.read_sql("""
-            SELECT order_id          AS "Order ID",
-                   accept_time       AS "Accept Time",
-                   segment_distance  AS "Segment Distance",
-                   stop_package_count AS "Stop Package Count",
-                   stop_index        AS "Stop Index",
-                   remaining_stops   AS "Remaining Stops",
-                   delivery_time     AS "Delivery Time"
-            FROM predictions
-            WHERE delivery_time IS NOT NULL
-        """, conn)
+
+async def retrain_delivery(db) -> bool:
+    rows = await db.predictions.find({"delivery_time": {"$ne": None}}).to_list(length=None)
+    if not rows:
+        return False
+
+    df = pd.DataFrame([
+        {
+            "Order ID": r.get("order_id"),
+            "Accept Time": r.get("accept_time"),
+            "Segment Distance": r.get("segment_distance"),
+            "Stop Package Count": r.get("stop_package_count"),
+            "Stop Index": r.get("stop_index"),
+            "Remaining Stops": r.get("remaining_stops"),
+            "Delivery Time": r.get("delivery_time"),
+        }
+        for r in rows
+    ])
 
     if df.empty:
         return False

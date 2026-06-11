@@ -3,7 +3,7 @@ Warehouse routing module.
 
 Typical call sequence:
 
-    from db import get_conn
+    from db import get_db
     from routing import (
         setup_routing_tables,
         load_branches,
@@ -15,11 +15,11 @@ Typical call sequence:
         PickupDeliveryPair,
     )
 
-    conn = get_conn()
-    setup_routing_tables(conn)          # idempotent, creates routing_branches if absent
+    db = get_db()
+    await setup_routing_tables(db)      # idempotent, seeds branches if empty
 
-    branches   = load_branches(conn)
-    deliveries = load_pending_deliveries(conn)
+    branches   = await load_branches(db)
+    deliveries = await load_pending_deliveries(db)
 
     assignments = assign_warehouses(deliveries, branches)
     locations, pair_specs = build_vrp_locations(assignments, branches, depot_branch_id=1)

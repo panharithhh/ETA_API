@@ -1,11 +1,17 @@
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import HTMLResponse
-from sqlalchemy.orm import Session
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from database import get_db
-from models.first_mile import ConfirmationAction, ConfirmationToken, Package, PackageEvent, PackageStatus
+from db import get_db
+from models.first_mile import (
+    CONFIRMATION_TOKENS,
+    PACKAGE_EVENTS,
+    PACKAGES,
+    ConfirmationAction,
+    PackageStatus,
+)
 
 router = APIRouter(prefix="/confirmation", tags=["Warehouse Confirmation"])
 
@@ -43,63 +49,68 @@ def _page(title: str, message: str, icon: str) -> HTMLResponse:
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.get("/confirm/{token}", include_in_schema=False)
-def confirm_delivery(token: str, db: Session = Depends(get_db)) -> HTMLResponse:
-    return _handle_token(token, ConfirmationAction.confirm, db)
+async def confirm_delivery(token: str, db: AsyncIOMotorDatabase = Depends(get_db)) -> HTMLResponse:
+    return await _handle_token(token, ConfirmationAction.confirm, db)
 
 
 @router.get("/reject/{token}", include_in_schema=False)
-def reject_delivery(token: str, db: Session = Depends(get_db)) -> HTMLResponse:
-    return _handle_token(token, ConfirmationAction.reject, db)
+async def reject_delivery(token: str, db: AsyncIOMotorDatabase = Depends(get_db)) -> HTMLResponse:
+    return await _handle_token(token, ConfirmationAction.reject, db)
 
 
 # ── Shared token handler ──────────────────────────────────────────────────────
 
-def _handle_token(token: str, expected_action: ConfirmationAction, db: Session) -> HTMLResponse:
-    row: ConfirmationToken | None = (
-        db.query(ConfirmationToken).filter(ConfirmationToken.token == token).first()
-    )
+async def _handle_token(
+    token: str, expected_action: ConfirmationAction, db: AsyncIOMotorDatabase
+) -> HTMLResponse:
+    row = await db[CONFIRMATION_TOKENS].find_one({"token": token})
 
     if not row:
         return _page("Invalid Link", "This confirmation link is not valid or does not exist.", "❌")
 
-    if row.used:
+    if row.get("used"):
         return _page("Already Used", "This link has already been used. No further action is needed.", "⚠️")
 
     # expires_at stored as naive UTC
-    if datetime.utcnow() > row.expires_at:
+    if datetime.utcnow() > row["expires_at"]:
         return _page("Link Expired", "This confirmation link expired 48 hours after it was sent.", "⏰")
 
-    if row.action != expected_action:
+    if row["action"] != expected_action.value:
         # Prevent using a confirm token on the reject endpoint and vice-versa
         return _page("Invalid Link", "This link cannot be used for that action.", "❌")
 
-    row.used = True
+    await db[CONFIRMATION_TOKENS].update_one({"_id": row["_id"]}, {"$set": {"used": True}})
 
-    package: Package = db.get(Package, row.package_id)
+    pkg_id = row["package_id"]
+    now = datetime.utcnow()
 
     if expected_action == ConfirmationAction.confirm:
-        package.status = PackageStatus.confirmed
-        db.add(PackageEvent(
-            package_id=package.id,
-            status=PackageStatus.confirmed,
-            notes="Customer confirmed delivery via email link — package queued for routing",
-        ))
-        db.commit()
+        await db[PACKAGES].update_one(
+            {"_id": pkg_id}, {"$set": {"status": PackageStatus.confirmed.value}}
+        )
+        await db[PACKAGE_EVENTS].insert_one({
+            "package_id": pkg_id,
+            "status": PackageStatus.confirmed.value,
+            "notes": "Customer confirmed delivery via email link — package queued for routing",
+            "created_at": now,
+        })
         return _page(
             "Delivery Confirmed",
-            f"Package #{package.id} is confirmed. We will proceed with routing your delivery.",
+            f"Package #{pkg_id} is confirmed. We will proceed with routing your delivery.",
             "✅",
         )
     else:
-        package.status = PackageStatus.rejected
-        db.add(PackageEvent(
-            package_id=package.id,
-            status=PackageStatus.rejected,
-            notes="Customer rejected delivery via email link — routing halted",
-        ))
-        db.commit()
+        await db[PACKAGES].update_one(
+            {"_id": pkg_id}, {"$set": {"status": PackageStatus.rejected.value}}
+        )
+        await db[PACKAGE_EVENTS].insert_one({
+            "package_id": pkg_id,
+            "status": PackageStatus.rejected.value,
+            "notes": "Customer rejected delivery via email link — routing halted",
+            "created_at": now,
+        })
         return _page(
             "Delivery Rejected",
-            f"Package #{package.id} has been rejected. Our team will follow up with you shortly.",
+            f"Package #{pkg_id} has been rejected. Our team will follow up with you shortly.",
             "🚫",
         )

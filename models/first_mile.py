@@ -1,15 +1,48 @@
+"""
+MongoDB data layer for the first-mile / mid-mile domain.
+
+There is no ORM — documents are plain dicts. This module holds the shared
+enums, the collection names, and small helpers for ObjectId handling and
+document serialization.
+
+Collections
+-----------
+branches            { _id, name, lat, lng }
+vehicles            { _id, vehicle_type, license_plate, is_available }
+drivers             { _id, name, phone, current_lat, current_lng,
+                      is_available, vehicle_id }
+packages            { _id, customer_phone, customer_email, receiver_phone,
+                      receiver_lat, receiver_lng, weight_kg, max_dimension_cm,
+                      status, origin_branch_id, destination_branch_id,
+                      current_branch_id, assigned_driver_id, assigned_vehicle_id,
+                      pickup_window_start, pickup_window_end, created_at,
+                      warehouse_arrived_at }
+package_events      { _id, package_id, status, driver_id, branch_id, notes,
+                      created_at }                       # append-only audit log
+confirmation_tokens { _id, package_id, token, action, expires_at, used,
+                      created_at }
+
+Warehouse inventory is NOT a collection — "packages at a warehouse" is a live
+query over packages where status == at_warehouse and current_branch_id == branch.
+"""
+
 import enum
-from datetime import datetime
-from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, Enum as SAEnum, Float, ForeignKey, Integer, String, Text
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-from sqlalchemy.sql import func
+from bson import ObjectId
+from bson.errors import InvalidId
 
 
-class Base(DeclarativeBase):
-    pass
+# ── Collection names ──────────────────────────────────────────────────────────
 
+BRANCHES = "branches"
+VEHICLES = "vehicles"
+DRIVERS = "drivers"
+PACKAGES = "packages"
+PACKAGE_EVENTS = "package_events"
+CONFIRMATION_TOKENS = "confirmation_tokens"
+
+
+# ── Enums (stored as plain strings) ───────────────────────────────────────────
 
 class VehicleType(str, enum.Enum):
     motorbike = "motorbike"
@@ -37,118 +70,27 @@ class ConfirmationAction(str, enum.Enum):
     reject = "reject"
 
 
-# native_enum=False → VARCHAR with CHECK on both PostgreSQL and SQLite (test-friendly)
-_vehicle_type_col = SAEnum(VehicleType, name="vehicle_type", native_enum=False)
-_pkg_status_col = SAEnum(PackageStatus, name="package_status", native_enum=False)
-_confirm_action_col = SAEnum(ConfirmationAction, name="confirmation_action", native_enum=False)
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def to_object_id(value) -> ObjectId | None:
+    """Parse a value into an ObjectId, returning None when it is not a valid id.
+
+    Lets routes turn a bad path param straight into a 404 instead of a 500.
+    """
+    if isinstance(value, ObjectId):
+        return value
+    try:
+        return ObjectId(value)
+    except (InvalidId, TypeError):
+        return None
 
 
-class Branch(Base):
-    __tablename__ = "branches"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    name: Mapped[str] = mapped_column(String(100), nullable=False)
-    lat: Mapped[float] = mapped_column(Float, nullable=False)
-    lng: Mapped[float] = mapped_column(Float, nullable=False)
-
-
-class Vehicle(Base):
-    __tablename__ = "vehicles"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    vehicle_type: Mapped[VehicleType] = mapped_column(_vehicle_type_col, nullable=False)
-    license_plate: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
-    is_available: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-
-    driver: Mapped[Optional["Driver"]] = relationship("Driver", back_populates="vehicle", uselist=False)
-
-
-class Driver(Base):
-    __tablename__ = "drivers"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    name: Mapped[str] = mapped_column(String(100), nullable=False)
-    phone: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
-    current_lat: Mapped[Optional[float]] = mapped_column(Float)
-    current_lng: Mapped[Optional[float]] = mapped_column(Float)
-    is_available: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    vehicle_id: Mapped[Optional[int]] = mapped_column(ForeignKey("vehicles.id"))
-
-    vehicle: Mapped[Optional[Vehicle]] = relationship("Vehicle", back_populates="driver")
-
-
-class Package(Base):
-    __tablename__ = "packages"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    customer_phone: Mapped[str] = mapped_column(String(20), nullable=False)
-    receiver_phone: Mapped[str] = mapped_column(String(20), nullable=False)
-    receiver_lat: Mapped[float] = mapped_column(Float, nullable=False)
-    receiver_lng: Mapped[float] = mapped_column(Float, nullable=False)
-    weight_kg: Mapped[float] = mapped_column(Float, nullable=False)
-    max_dimension_cm: Mapped[float] = mapped_column(Float, nullable=False)
-    status: Mapped[PackageStatus] = mapped_column(_pkg_status_col, default=PackageStatus.created, nullable=False)
-
-    # Branch tracking — current_branch_id is separate from origin/destination
-    origin_branch_id: Mapped[Optional[int]] = mapped_column(ForeignKey("branches.id"))
-    destination_branch_id: Mapped[Optional[int]] = mapped_column(ForeignKey("branches.id"))
-    current_branch_id: Mapped[Optional[int]] = mapped_column(ForeignKey("branches.id"))
-
-    assigned_driver_id: Mapped[Optional[int]] = mapped_column(ForeignKey("drivers.id"))
-    assigned_vehicle_id: Mapped[Optional[int]] = mapped_column(ForeignKey("vehicles.id"))
-
-    # Container-only scheduling fields
-    pickup_window_start: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    pickup_window_end: Mapped[Optional[datetime]] = mapped_column(DateTime)
-
-    customer_email: Mapped[Optional[str]] = mapped_column(String(255))
-
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-
-    events: Mapped[list["PackageEvent"]] = relationship("PackageEvent", back_populates="package")
-
-
-class PackageEvent(Base):
-    """Append-only audit log — never update rows, only insert."""
-
-    __tablename__ = "package_events"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    package_id: Mapped[int] = mapped_column(ForeignKey("packages.id"), nullable=False)
-    status: Mapped[PackageStatus] = mapped_column(_pkg_status_col, nullable=False)
-    driver_id: Mapped[Optional[int]] = mapped_column(ForeignKey("drivers.id"))
-    branch_id: Mapped[Optional[int]] = mapped_column(ForeignKey("branches.id"))
-    notes: Mapped[Optional[str]] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-
-    package: Mapped[Package] = relationship("Package", back_populates="events")
-
-
-class ConfirmationToken(Base):
-    """Single-use token emailed to the customer for confirm/reject actions."""
-
-    __tablename__ = "confirmation_tokens"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    package_id: Mapped[int] = mapped_column(ForeignKey("packages.id"), nullable=False)
-    token: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
-    action: Mapped[ConfirmationAction] = mapped_column(_confirm_action_col, nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-
-
-class WarehouseInventory(Base):
-    """Tracks which packages are physically sitting at which branch."""
-
-    __tablename__ = "warehouse_inventory"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    package_id: Mapped[int] = mapped_column(ForeignKey("packages.id"), nullable=False, index=True)
-    branch_id: Mapped[int] = mapped_column(ForeignKey("branches.id"), nullable=False, index=True)
-    arrived_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    departed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-
-    package: Mapped[Package] = relationship("Package")
-    branch: Mapped[Branch] = relationship("Branch")
+def serialize(doc: dict | None) -> dict | None:
+    """Convert a Mongo document for JSON output: ObjectId fields → str."""
+    if doc is None:
+        return None
+    out = dict(doc)
+    for key, value in out.items():
+        if isinstance(value, ObjectId):
+            out[key] = str(value)
+    return out
