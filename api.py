@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from db import init_db
 from routes.delivery import router as delivery_router
 from routes.c2c import router as c2c_router
@@ -20,6 +21,17 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Chonchoun Courier API", lifespan=lifespan)
+
+# Allow browser clients (Flutter web admin) to call the API cross-origin.
+# Open in all environments since the API is public read; tighten allow_origins
+# to specific hosts if auth-bearing endpoints are added later.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(delivery_router)
 app.include_router(c2c_router)
