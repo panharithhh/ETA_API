@@ -94,11 +94,18 @@ def solve_vrppd(
 
     # ── Pickup & delivery pairs ───────────────────────────────────────────────
     solver = routing.solver()
+    # High penalty so dropping an order is a last resort (e.g. if unreachable)
+    penalty = int(100_000 * _SCALE)
+    
     for pd in pairs:
         pickup_idx = manager.NodeToIndex(pd.pickup_node)
         delivery_idx = manager.NodeToIndex(pd.delivery_node)
 
         routing.AddPickupAndDelivery(pickup_idx, delivery_idx)
+
+        # Allow dropping the order instead of failing the entire route
+        routing.AddDisjunction([pickup_idx], penalty)
+        routing.AddDisjunction([delivery_idx], penalty)
 
         # Same vehicle must handle both ends
         solver.Add(routing.VehicleVar(pickup_idx) == routing.VehicleVar(delivery_idx))

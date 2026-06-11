@@ -123,19 +123,13 @@ def build_vrp_locations(
 
     # Slot 0: depot
     locations: list[tuple[float, float]] = [(depot.lat, depot.lng)]
-    branch_node: dict[int, int] = {depot_branch_id: 0}
-
-    def _branch_node(b: Branch) -> int:
-        if b.id not in branch_node:
-            branch_node[b.id] = len(locations)
-            locations.append((b.lat, b.lng))
-        return branch_node[b.id]
 
     pairs: list[dict] = []
 
     for a in assignments:
-        pb = _branch_node(a.pickup_branch)
-        db = _branch_node(a.dropoff_branch)
+        # Create a unique node for this order's pickup branch
+        pb = len(locations)
+        locations.append((a.pickup_branch.lat, a.pickup_branch.lng))
 
         # Customer delivery point
         delivery_node = len(locations)
@@ -143,9 +137,15 @@ def build_vrp_locations(
 
         if a.needs_transfer:
             # Transfer leg: pickup_branch → dropoff_branch
-            pairs.append({"order_id": a.order_id, "pickup_node": pb, "delivery_node": db})
+            db_transfer_in = len(locations)
+            locations.append((a.dropoff_branch.lat, a.dropoff_branch.lng))
+            
+            db_transfer_out = len(locations)
+            locations.append((a.dropoff_branch.lat, a.dropoff_branch.lng))
+
+            pairs.append({"order_id": a.order_id, "pickup_node": pb, "delivery_node": db_transfer_in})
             # Last-mile leg: dropoff_branch → customer
-            pairs.append({"order_id": a.order_id, "pickup_node": db, "delivery_node": delivery_node})
+            pairs.append({"order_id": a.order_id, "pickup_node": db_transfer_out, "delivery_node": delivery_node})
         else:
             # Direct: pickup_branch → customer
             pairs.append({"order_id": a.order_id, "pickup_node": pb, "delivery_node": delivery_node})
