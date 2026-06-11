@@ -37,7 +37,31 @@ async def load_branches(db) -> list[Branch]:
     rows = await db.branches.find().sort("_id", 1).to_list(length=None)
     if not rows:
         raise RuntimeError("Branch collection is empty — run setup_routing_tables(db) first.")
-    return [Branch(id=str(r["_id"]), name=r["name"], lat=r["lat"], lng=r["lng"]) for r in rows]
+    
+    branches = []
+    for r in rows:
+        lat = r.get("lat")
+        if lat is None:
+            lat = r.get("latitude")
+        
+        lng = r.get("lng")
+        if lng is None:
+            lng = r.get("longitude")
+        if lng is None:
+            lng = r.get("lon")
+            
+        if lat is not None and lng is not None:
+            branches.append(Branch(
+                id=str(r["_id"]),
+                name=r.get("name", "Unknown"),
+                lat=float(lat),
+                lng=float(lng)
+            ))
+            
+    if not branches:
+        raise RuntimeError("No branches with valid coordinates found.")
+        
+    return branches
 
 
 # ── Delivery loader ───────────────────────────────────────────────────────────
@@ -94,11 +118,24 @@ async def load_pending_deliveries(db, include_completed: bool = False) -> list[d
     )
     async for p in db.packages.find(pkg_query).sort("created_at", 1):
         origin = branches.get(p.get("origin_branch_id"))
+        
+        pickup_lat, pickup_lng = None, None
+        if origin:
+            pickup_lat = origin.get("lat")
+            if pickup_lat is None:
+                pickup_lat = origin.get("latitude")
+                
+            pickup_lng = origin.get("lng")
+            if pickup_lng is None:
+                pickup_lng = origin.get("longitude")
+            if pickup_lng is None:
+                pickup_lng = origin.get("lon")
+
         rec = {
             "order_id": str(p["_id"]),
             "courier_id": p.get("assigned_driver_id"),
-            "pickup_lat": origin["lat"] if origin else None,
-            "pickup_lng": origin["lng"] if origin else None,
+            "pickup_lat": pickup_lat,
+            "pickup_lng": pickup_lng,
             "dropoff_lat": p.get("receiver_lat"),
             "dropoff_lng": p.get("receiver_lng"),
             "accept_time": p.get("created_at"),
